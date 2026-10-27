@@ -14,6 +14,7 @@ return {
   LrLibraryMenuItems = {
     { title = 'Recréer les albums Google Photos…', file = 'RecreerAlbums.lua' },
     { title = 'Fusionner les doublons…', file = 'FusionnerDoublons.lua' },
+    { title = 'Fusion manuelle des photos sélectionnées…', file = 'FusionManuelle.lua', enabledWhen = 'photosSelected' },
     { title = 'Réduire les rafales…', file = 'ReduireRafales.lua' },
   },
   LrExportServiceProvider = {
@@ -21,5 +22,5 @@ return {
     file = 'ServiceGooglePhotos.lua',
     builtInPresetsDir = 'presets',
   },
-  VERSION = { major = 1, minor = 3, revision = 0 },
+  VERSION = { major = 1, minor = 4, revision = 0 },
 }

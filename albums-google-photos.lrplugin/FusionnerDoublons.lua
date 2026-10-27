@@ -3,18 +3,15 @@
 --
 -- 0. Portée : les photos sélectionnées s'il y en a au moins deux, sinon toutes les photos affichées dans la
 --    grille (dossier, collection…). Une copie n'est trouvée que si ses doublons sont dans cette portée.
--- 1. Candidats : photos de même nom d'origine (suffixes « -2 », « (2) », « -Modifier »,
---    « -Modifié-2026-08-02T22-37-43 », « _filtered », « -20260821-DxO_DeepPRIME XD3 » ignorés) et de
---    même date de prise de vue. Les fichiers dont le nom annonce une retouche sont traités à part :
---    jamais retirés au profit d'une copie sans marqueur, même si leur image est identique.
--- 2. Comparaison des images (empreinte, voir Empreintes.lua) : deux copies dont seules les
---    métadonnées intégrées diffèrent sont des copies du même fichier.
--- 3. Les images qui diffèrent sont comparées par une miniature (ImageMagick, voir Vignettes.lua et
---    Similitude.lua) : si elles montrent exactement la même vue (même forme, mêmes couleurs), l'une
---    est une copie réduite ou recompressée de l'autre et on garde la plus grande. Une version
---    retouchée (exposition, teinte, recadrage, éditeur externe, nom « -Modifier ») n'est jamais
---    prise pour une copie : elle est conservée avec l'original et listée dans le rapport.
---    Les retouches faites dans Lightroom ne changent pas le fichier : voir Doublons.lua.
+-- 1. Empreinte exacte de chaque photo de la portée (voir Empreintes.lua) : deux contenus identiques
+--    sont regroupés même si leurs noms ou leurs dates diffèrent.
+-- 2. Pour les photos dont l'empreinte diffère, recherche de variantes de même nom d'origine
+--    (suffixes « -2 », « (2) », « -Modifier », « _filtered », DxO…) et de même date de prise de vue.
+-- 3. Ces variantes sont comparées par une miniature 16 × 16 (ImageMagick, voir Vignettes.lua et
+--    Similitude.lua) : si elles montrent la même vue, l'une est une copie réduite ou recompressée.
+--    Les noms qui annoncent une retouche interdisent cette comparaison approximative, mais pas une
+--    fusion lorsque l'empreinte exacte est identique. Les retouches Lightroom restent protégées
+--    séparément par Doublons.lua.
 -- 4. Pour chaque groupe, choix de la copie à garder (voir Doublons.lua) et plan de ce qui change
 --    (Doublons.effets).
 -- 5. Rapport HTML (rapport-doublons\index.html, voir RapportHtml.lua) : groupe par groupe, avec des
@@ -23,7 +20,7 @@
 --    dans doublons.csv.
 -- 6. Après confirmation, la copie gardée prend la place des autres dans leurs collections (sauf
 --    les collections dynamiques, qui se recalculent seules) et récupère ce qui lui manque :
---    mots-clés, note (la plus haute), drapeau « retenue », position GPS, et les champs de texte
+--    mots-clés, note (la plus haute), drapeau, position GPS, et les champs de texte
 --    listés dans Doublons.CHAMPS_TEXTE quand elle n'a rien dans le champ. Les autres copies quittent leurs
 --    collections et sont rassemblées dans la collection « Doublons à retirer ».
 --    Ne sont pas recopiés : réglages de développement (une copie retouchée dans Lightroom est
@@ -176,32 +173,40 @@ end
 --   sansMiniature : images dont ImageMagick n'a pas pu faire de miniature (conservées) ;
 --   magickAbsent : vrai si des comparaisons de vues étaient utiles mais ImageMagick est introuvable.
 local function chercherGroupes(copies, progression)
+  -- L'empreinte exacte est indépendante du nom et de la date : on la calcule pour toute la portée.
+  -- Le cache évite de relire deux entrées Lightroom qui pointent vers le même chemin.
+  local empreintesParChemin = {}
+  local illisibles = 0
+  for fait, c in ipairs(copies) do
+    if progression:isCanceled() then return nil end
+    progression:setCaption(string.format('Empreinte des photos : %d / %d', fait, #copies))
+    progression:setPortionComplete(fait, #copies)
+    c.octets = c.taille
+    local cleChemin = c.chemin:gsub('/', '\\'):lower()
+    local empreinte = empreintesParChemin[cleChemin]
+    if empreinte == nil then
+      local ok, resultat = LrTasks.pcall(Empreintes.empreinte, c.chemin)
+      empreinte = ok and resultat or false
+      -- Les empreintes « gros » ne sont qu'un échantillon début/fin. On ne les prend pas pour
+      -- une preuve d'identité entre chemins différents.
+      if empreinte and empreinte:match('^gros:') then empreinte = empreinte .. '|' .. cleChemin end
+      empreintesParChemin[cleChemin] = empreinte
+    end
+    c.empreinte = empreinte ~= false and empreinte or nil
+    if not c.empreinte then illisibles = illisibles + 1 end
+    LrTasks.yield()
+  end
+
   local candidats = Doublons.grouper(copies, function(c)
     local extension = (c.chemin:match('%.([^%./\\]*)$') or ''):lower()
     return Doublons.nomDeBase(c.chemin) .. '.' .. extension .. '|'
       .. (c.date and string.format('%d', math.floor(c.date)) or '')
   end)
-  local total = 0
-  for _, g in ipairs(candidats) do total = total + #g end
-
-  -- Empreinte de l'image de chaque candidat.
-  local fait, illisibles = 0, 0
   local analyses = {}
   for _, groupe in ipairs(candidats) do
-    for _, c in ipairs(groupe) do
-      if progression:isCanceled() then return nil end
-      fait = fait + 1
-      progression:setCaption(string.format('Comparaison des fichiers : %d / %d', fait, total))
-      progression:setPortionComplete(fait, total)
-      local ok, empreinte = LrTasks.pcall(Empreintes.empreinte, c.chemin)
-      c.empreinte = ok and empreinte or nil
-      if not c.empreinte then illisibles = illisibles + 1 end
-      LrTasks.yield()
-    end
-    -- Un fichier dont le nom annonce une retouche (« -Modifier », « _filtered », « DxO_… ») est une
-    -- version voulue : jamais retiré au profit d'une copie sans marqueur, même si son image est
-    -- (encore) identique. Marqués et non marqués sont donc traités à part ; deux fichiers marqués
-    -- identiques restent des doublons l'un de l'autre.
+    -- Un fichier dont le nom annonce une retouche (« -Modifier », « _filtered », « DxO_… ») ne sera
+    -- jamais fusionné par simple ressemblance visuelle. Les empreintes exactes identiques ont déjà
+    -- été regroupées sans tenir compte de ces marqueurs.
     local marques, ordinaires = {}, {}
     for _, c in ipairs(groupe) do
       if Similitude.nomRetouche(nomFichier(c.chemin)) then marques[#marques + 1] = c else ordinaires[#ordinaires + 1] = c end
@@ -266,8 +271,64 @@ local function chercherGroupes(copies, progression)
       differents[#differents + 1] = entier
     end
   end
+
+  -- Les similarités de miniature restent limitées aux candidats de même nom/date. Les empreintes
+  -- complètes, elles, regroupent les mêmes contenus partout dans la portée, quel que soit leur nom.
+  local parent = {}
+  for _, c in ipairs(copies) do parent[c] = c end
+  local function racine(c)
+    if parent[c] ~= c then parent[c] = racine(parent[c]) end
+    return parent[c]
+  end
+  local function unir(groupe)
+    local premier
+    for _, c in ipairs(groupe) do
+      if not premier then
+        premier = c
+      else
+        local a, b = racine(premier), racine(c)
+        if a ~= b then parent[b] = a end
+      end
+    end
+  end
+  for _, groupe in ipairs(groupes) do unir(groupe) end
+
+  local parEmpreinte = {}
+  for _, c in ipairs(copies) do
+    if c.empreinte and not c.empreinte:match('^gros:') then
+      parEmpreinte[c.empreinte] = parEmpreinte[c.empreinte] or {}
+      table.insert(parEmpreinte[c.empreinte], c)
+    end
+  end
+  for _, groupe in pairs(parEmpreinte) do
+    if #groupe > 1 then unir(groupe) end
+  end
+
+  local composantes, ordreComposantes = {}, {}
+  for _, c in ipairs(copies) do
+    local r = racine(c)
+    if not composantes[r] then
+      composantes[r] = {}
+      ordreComposantes[#ordreComposantes + 1] = r
+    end
+    table.insert(composantes[r], c)
+  end
+  local groupesFinaux = {}
+  for _, r in ipairs(ordreComposantes) do
+    if #composantes[r] > 1 then groupesFinaux[#groupesFinaux + 1] = composantes[r] end
+  end
+
+  local differentsFinaux = {}
+  for _, groupe in ipairs(differents) do
+    local racines, nombre = {}, 0
+    for _, c in ipairs(groupe) do
+      local r = racine(c)
+      if not racines[r] then racines[r] = true; nombre = nombre + 1 end
+    end
+    if nombre > 1 then differentsFinaux[#differentsFinaux + 1] = groupe end
+  end
   return {
-    groupes = groupes, differents = differents, illisibles = illisibles, sansMiniature = sansMiniature,
+    groupes = groupesFinaux, differents = differentsFinaux, illisibles = illisibles, sansMiniature = sansMiniature,
     magickAbsent = not magickDispo and nbMultiples > 0,
   }
 end
@@ -338,7 +399,7 @@ local function fusionnerGroupe(decision, corbeille)
   for _, q in ipairs(e.quittees) do q.collection.objet:removePhotos({ q.copie.photo }) end
   for _, mot in ipairs(e.motsCles) do p:addKeyword(mot.objet) end
   if e.note then p:setRawMetadata('rating', e.note) end
-  if e.drapeau then p:setRawMetadata('pickStatus', 1) end
+  if e.drapeau then p:setRawMetadata('pickStatus', e.drapeau) end
   for _, t in ipairs(e.textes) do p:setRawMetadata(t.cle, t.valeur) end
   if e.gps then p:setRawMetadata('gps', e.gps) end
   local retirees = {}

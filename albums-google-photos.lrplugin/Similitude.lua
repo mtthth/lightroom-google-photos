@@ -8,7 +8,8 @@
 --   - copie réduite ou recompressée : écart moyen de 0,3 à 1,5 sur 255 (au plus 10 sur un bloc) ;
 --   - retouche (exposition, teinte, effacement, recadrage) : écart moyen de 4 et plus.
 -- Les seuils sont placés entre les deux, du côté prudent : dans le doute, les deux versions sont
--- gardées. Un nom qui annonce une retouche (« -Modifier ») compte aussi : jamais fusionné.
+-- gardées. Un nom qui annonce une retouche (« -Modifier ») interdit cette comparaison approximative;
+-- une empreinte exacte identique est traitée séparément comme un doublon.
 
 local M = {}
 
@@ -40,7 +41,7 @@ end
 --   « -Modifier » et « -Modifié » (éditeurs externes en français, y compris « -Modifié-2026-08-02T22-37-43 »),
 --   « -Edit », « -Edited », « -Retouche », « _filtered »,
 --   « -20260821-DxO_DeepPRIME XD3 » et « -DxO_DeepPRIME 3 » (DxO PureRAW, avec ou sans date).
--- Pour en ajouter un, il suffit de l'inscrire ici : la comparaison des versions comme la
+-- Pour en ajouter un, il suffit de l'inscrire ici : la comparaison visuelle approximative comme la
 -- recherche des copies d'un même fichier (Doublons.nomDeBase) s'en servent. Le marqueur le plus
 -- long (date + DxO) doit précéder le plus court, car nomDeBase les retire dans cet ordre.
 M.MARQUEURS_RETOUCHE = { '%-modifi', '%-edit', '%-retouch', '[_%-]filtered',

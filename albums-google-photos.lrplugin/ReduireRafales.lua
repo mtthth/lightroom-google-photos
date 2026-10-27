@@ -40,6 +40,7 @@ local Vignettes = require 'Vignettes'
 
 local TAILLE_LOT = 1000
 local PARALLELE = 4   -- mesures de netteté en même temps
+local LIBELLES_COULEUR = { red = true, yellow = true, green = true, blue = true, purple = true }
 local RAPPORT = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), 'rafales.csv')
 local HISTORIQUE = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), 'photos-traitees.txt')
 
@@ -108,7 +109,8 @@ local function lireFichiers(catalogue, photos, ignorees, historique, progression
         local raisons = {}
         if (b.rating or 0) > 0 then raisons[#raisons + 1] = 'note ' .. b.rating end
         if (b.pickStatus or 0) ~= 0 then raisons[#raisons + 1] = 'drapeau' end
-        if b.colorNameForLabel and b.colorNameForLabel ~= '' and b.colorNameForLabel ~= 'none' then
+        local libelle = (b.colorNameForLabel or ''):lower()
+        if LIBELLES_COULEUR[libelle] then
           raisons[#raisons + 1] = 'libellé ' .. b.colorNameForLabel
         end
         if (b.countVirtualCopies or 0) > 0 then raisons[#raisons + 1] = 'copies virtuelles' end

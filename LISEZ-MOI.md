@@ -84,16 +84,16 @@ Une même photo importée plusieurs fois (dossier « Désordre », copies `-2`, 
 **affichées** dans la grille (le dossier ou la collection ouverte). Une boîte l'annonce avant de commencer. Une copie
 n'est trouvée que si ses doublons sont aussi dans ces photos : sélectionne une année, un dossier parent…
 
-La commande cherche les photos de même nom d'origine (les suffixes de copie ou de retouche sont ignorés : `-2`,
-`(2)`, `-Modifier`, `-Modifié-2026-08-02T22-37-43`, `_filtered`, `-20260821-DxO_DeepPRIME XD3`) et de même date de
-prise de vue, puis compare les **images**, pas les fichiers (des métadonnées XMP différentes ne font pas des fichiers
-différents) :
+La commande calcule d'abord une empreinte du contenu de toutes les photos de la portée : une empreinte identique
+signale un doublon, quel que soit le nom ou la date. Pour les contenus différents, elle cherche aussi les variantes de
+même nom d'origine (suffixes de copie ou de retouche ignorés : `-2`, `(2)`, `-Modifier`, `_filtered`, DxO…) et de même
+date, puis compare les images par une miniature ImageMagick de 16 × 16 pixels :
 
-- image identique : doublons, on garde un seul fichier ;
-- même vue en plus petit ou recompressée (miniature ImageMagick de 16 × 16, même forme, mêmes couleurs) : on garde la
+- empreinte identique : doublons, on garde un seul fichier ;
+- même vue en plus petit ou recompressée (miniature 16 × 16, même forme, mêmes couleurs) : on garde la
   plus grande ;
-- image différente (retouche, recadrage…) : les deux sont gardées ; un fichier dont le nom annonce une retouche n'est
-  jamais retiré.
+- image différente (retouche, recadrage…) : les deux sont gardées. Un nom qui annonce une retouche empêche la fusion
+  par ressemblance de miniature, mais pas si l'empreinte exacte est identique.
 
 La copie gardée est la plus grande image, puis celle qui est retouchée dans Lightroom, puis la mieux rangée. Elle prend
 la place des autres dans leurs collections et récupère mots-clés, note, drapeau, position GPS, et les champs de texte
@@ -113,6 +113,16 @@ collections modifiées) ouvrent la page, et une barre de filtre cherche par nom 
 que celui qui est appliqué ensuite : il ne peut pas annoncer autre chose. Les miniatures sont des aperçus JPEG de
 220 pixels écrits dans `rapport-doublons\vignettes\` (réutilisés d'un rapport à l'autre ; case à décocher dans la
 boîte de départ pour s'en passer). Le détail est aussi dans `doublons.csv`.
+
+### Fusion manuelle des photos sélectionnées…
+
+Pour fusionner un groupe que la détection automatique ne reconnaît pas : sélectionne ses photos, puis lance la
+commande dans **Bibliothèque → Options du module externe**. Le SDK Lightroom ne permet pas d'ajouter une commande
+au menu du clic droit. La commande considère toute la sélection comme une seule photo, sans comparer les fichiers.
+Elle demande quelle photo garder, indique les collections qui seront réunies et demande confirmation avant toute
+modification. Les retouches Lightroom, copies virtuelles et photos publiées sont protégées : une photo qui porte
+ces éléments ne peut pas être retirée du groupe. Les copies fusionnées rejoignent « Doublons à retirer » et sont
+mémorisées dans `photos-traitees.txt`.
 
 ### Réduire les rafales…
 

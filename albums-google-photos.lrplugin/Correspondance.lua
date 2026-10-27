@@ -112,6 +112,17 @@ local function nomsProches(a, b)
   return a:find(b, 1, true) == 1 or b:find(a, 1, true) == 1
 end
 
+local function avantPhoto(a, b)
+  local function identifiant(photo)
+    if type(photo) == 'number' or type(photo) == 'string' then return photo end
+    local ok, id = pcall(function() return photo.localIdentifier end)
+    return ok and id or tostring(photo)
+  end
+  local idA, idB = identifiant(a.photo), identifiant(b.photo)
+  if type(idA) == 'number' and type(idB) == 'number' and idA ~= idB then return idA < idB end
+  return tostring(a.photo) < tostring(b.photo)
+end
+
 -- parNom : les candidats partagent déjà le nom ; sinon ils ne partagent que la date.
 local function choisir(candidats, cherche, parNom)
   if not candidats or #candidats == 0 then return nil end
@@ -146,8 +157,13 @@ local function choisir(candidats, cherche, parNom)
   local proches = filtrer(restants, function(c) return nomsProches(c.origine, cherche.origine) end)
   if #proches == 1 then return proches[1].photo end
 
-  -- Même nom et même date : ce sont des doublons, n'importe lequel convient.
-  if parNom then return (memeExtension[1] or restants[1]).photo end
+  -- Même nom et même date : choisir le même enregistrement à chaque exécution évite d'ajouter
+  -- des doublons dans une collection si plusieurs entrées Lightroom sont ambiguës.
+  if parNom then
+    local choix = #memeExtension > 0 and memeExtension or restants
+    table.sort(choix, avantPhoto)
+    return choix[1].photo
+  end
   return nil
 end
 

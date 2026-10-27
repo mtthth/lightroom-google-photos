@@ -216,7 +216,7 @@ end
 -- gardée prend la place des copies retirées dans leurs collections, et récupère ce qui lui manque.
 -- decision : résultat de decider ; chaque copie porte, quand elle est lue dans Lightroom :
 --   collections = { { id, nom, dynamique, exclue, objet }… }   (exclue : une corbeille, jamais recopiée)
---   motsCles = { { nom, objet }… }, note, drapeau (1 = retenue), gps, textes = { clé = texte }.
+--   motsCles = { { nom, objet }… }, note, drapeau (-1 = rejetée, 1 = retenue), gps, textes = { clé = texte }.
 -- Les collections dynamiques se recalculent seules : elles ne sont pas touchées.
 -- Renvoie { collections (que la gardée rejoint), quittees = { { collection, copie }… } (les retirées en sortent),
 --           motsCles (à ajouter), note, drapeau, gps (à poser, ou nil), textes = { { cle, valeur }… } }.
@@ -252,9 +252,11 @@ function M.effets(decision)
       note = c.note
       e.note = note
     end
-    if c.drapeau == 1 and drapeau ~= 1 then
-      drapeau = 1
-      e.drapeau = 1
+    -- Conserve un choix explicite : une retenue prévaut sur un rejet, qui prévaut sur l'absence de drapeau.
+    local drapeauCopie = c.drapeau or 0
+    if (drapeauCopie == 1 and drapeau ~= 1) or (drapeauCopie == -1 and drapeau == 0) then
+      drapeau = drapeauCopie
+      e.drapeau = drapeauCopie
     end
     for _, cle in ipairs(M.CHAMPS_TEXTE) do
       local valeur = (c.textes or {})[cle] or ''

@@ -139,7 +139,10 @@ local function lignesEffets(e, collectionARetirer)
     l[#l + 1] = 'Mots-clés ajoutés : ' .. guillemets(noms)
   end
   if e.note then l[#l + 1] = 'Note relevée à ' .. string.rep('★', e.note) end
-  if e.drapeau then l[#l + 1] = 'Drapeau « retenue » recopié' end
+  if e.drapeau then
+    local choix = e.drapeau == 1 and 'retenue' or 'rejetée'
+    l[#l + 1] = 'Drapeau « ' .. choix .. ' » recopié'
+  end
   for _, t in ipairs(e.textes) do
     l[#l + 1] = h(Doublons.NOMS_CHAMPS[t.cle] or t.cle) .. ' recopié(e) : ' .. h(t.valeur)
   end
@@ -293,7 +296,7 @@ function M.page(m)
   -- texte : « singulier|pluriel » (le nombre s'accorde ; une valeur déjà formatée, comme une taille, prend le pluriel).
   local function carteChiffre(valeur, texte, couleur)
     local singulier, plur = texte:match('^(.-)|(.*)$')
-    local accorde = (type(valeur) == 'number' and valeur <= 1) and singulier or plur
+    local accorde = (type(valeur) == 'number' and valeur == 1) and singulier or plur
     ajouter(string.format('<div><b%s>%s</b><span>%s</span></div>', couleur and (' style="color:var(--' .. couleur .. ')"') or '',
       h(valeur), h(accorde or texte)))
   end
