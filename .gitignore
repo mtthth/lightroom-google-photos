@@ -1,0 +1,21 @@
+# Secret OAuth Google (client_secret_….json) : ne jamais le commiter.
+client_secret*.json
+
+# Données personnelles produites par les scripts : noms d'albums, noms de fichiers, identifiants de photos.
+albums-*.csv
+photos-*.csv
+
+# Photos téléchargées depuis Google Photos, ou à importer.
+photos-*-manquantes/
+photos-*-originaux-non-importes/
+
+# Rapports générés (le HTML embarque des miniatures de photos personnelles).
+rafales-*.html
+rafales-*.csv
+rafales.csv
+doublons.csv
+
+# Journal d'erreurs de Lightroom.
+log.txt
+
+node_modules/
