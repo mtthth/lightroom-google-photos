@@ -1,7 +1,8 @@
 -- Mesures sur une image, calculées par ImageMagick (Lightroom ne sait pas décoder une image lui-même) :
 --   - une miniature de 16 × 16 pixels, pour reconnaître une copie réduite ou recompressée
 --     (voir Similitude.lua) ;
---   - la netteté, pour choisir le meilleur cadre d'une rafale (voir Rafales.lua).
+--   - la netteté, pour choisir le meilleur cadre d'une rafale (voir Rafales.lua) ;
+--   - un aperçu JPEG de 220 pixels, pour le rapport HTML des doublons (voir RapportHtml.lua).
 --
 -- Chemins : LrTasks.execute passe par cmd.exe, qui ne sait pas lire les accents de façon fiable
 -- (« Désordre », « Numérisations »…). Un fichier dont le chemin n'est pas en ASCII simple est donc

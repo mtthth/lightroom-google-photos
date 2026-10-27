@@ -7,8 +7,8 @@
 // vrai ImageMagick pour les images. Chemin de texlua : variable TEXLUA, sinon l'installation MiKTeX
 // de l'utilisateur.
 //
-// Suites : doublons (fusion), vignettes (copies réduites, netteté, ImageMagick réel), rafales,
-// service (export vers Google Photos), json.
+// Suites : doublons (fusion), vignettes (copies réduites, netteté, ImageMagick réel), rapport (page HTML
+// des doublons, aperçus), rafales, service (export vers Google Photos), json.
 // --mutants : casse ensuite une règle à la fois dans une copie du module et vérifie que les tests
 // échouent (environ 3 minutes).
 
@@ -27,7 +27,7 @@ if (!existsSync(lua)) {
 }
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'lrgp-tests-'));
-const suites = ['doublons', 'vignettes', 'rafales', 'service', 'json'];
+const suites = ['doublons', 'vignettes', 'rapport', 'rafales', 'service', 'json'];
 let echecs = 0;
 try {
   for (const suite of suites) {

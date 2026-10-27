@@ -1,6 +1,8 @@
--- Fusionne les doublons du catalogue : une même photo importée plusieurs fois depuis des dossiers
--- différents, ou existant en plusieurs tailles.
+-- Fusionne les doublons des photos sélectionnées (ou, sans sélection, des photos affichées) : une même
+-- photo importée plusieurs fois depuis des dossiers différents, ou existant en plusieurs tailles.
 --
+-- 0. Portée : les photos sélectionnées s'il y en a au moins deux, sinon toutes les photos affichées dans la
+--    grille (dossier, collection…). Une copie n'est trouvée que si ses doublons sont dans cette portée.
 -- 1. Candidats : photos de même nom d'origine (suffixes « -2 », « (2) », « -Modifier »,
 --    « -Modifié-2026-08-02T22-37-43 », « _filtered », « -20260821-DxO_DeepPRIME XD3 » ignorés) et de
 --    même date de prise de vue. Les fichiers dont le nom annonce une retouche sont traités à part :
@@ -13,44 +15,57 @@
 --    retouchée (exposition, teinte, recadrage, éditeur externe, nom « -Modifier ») n'est jamais
 --    prise pour une copie : elle est conservée avec l'original et listée dans le rapport.
 --    Les retouches faites dans Lightroom ne changent pas le fichier : voir Doublons.lua.
--- 4. Pour chaque groupe, choix de la copie à garder (voir Doublons.lua).
--- 5. Après confirmation, la copie gardée prend la place des autres dans leurs collections (sauf
+-- 4. Pour chaque groupe, choix de la copie à garder (voir Doublons.lua) et plan de ce qui change
+--    (Doublons.effets).
+-- 5. Rapport HTML (rapport-doublons\index.html, voir RapportHtml.lua) : groupe par groupe, avec des
+--    miniatures, la copie gardée et pourquoi, et ce qui change dans les collections et les métadonnées.
+--    Il est construit à partir du même plan que celui qui est appliqué ensuite. Le détail est aussi écrit
+--    dans doublons.csv.
+-- 6. Après confirmation, la copie gardée prend la place des autres dans leurs collections (sauf
 --    les collections dynamiques, qui se recalculent seules) et récupère ce qui lui manque :
 --    mots-clés, note (la plus haute), drapeau « retenue », position GPS, et les champs de texte
---    listés dans CHAMPS_TEXTE quand elle n'a rien dans le champ. Les autres copies quittent leurs
+--    listés dans Doublons.CHAMPS_TEXTE quand elle n'a rien dans le champ. Les autres copies quittent leurs
 --    collections et sont rassemblées dans la collection « Doublons à retirer ».
 --    Ne sont pas recopiés : réglages de développement (une copie retouchée dans Lightroom est
 --    toujours la gardée, sinon le groupe reste « à vérifier »), copies virtuelles, instantanés,
 --    piles, collections publiées (groupe « à vérifier »), fichiers annexes sur le disque (.xmp, .on1).
 -- Le SDK de Lightroom ne permet pas de retirer une photo du catalogue : il reste à ouvrir cette
 -- collection, tout sélectionner et appuyer sur Suppr.
--- Le détail des décisions est écrit dans doublons.csv, dans le dossier du projet.
 
 local LrApplication = import 'LrApplication'
+local LrBinding = import 'LrBinding'
+local LrDate = import 'LrDate'
 local LrDialogs = import 'LrDialogs'
+local LrFileUtils = import 'LrFileUtils'
 local LrFunctionContext = import 'LrFunctionContext'
+local LrHttp = import 'LrHttp'
 local LrPathUtils = import 'LrPathUtils'
 local LrProgressScope = import 'LrProgressScope'
-local LrShell = import 'LrShell'
 local LrTasks = import 'LrTasks'
+local LrView = import 'LrView'
 
+local Catalogue = require 'Catalogue'
 local Csv = require 'Csv'
 local Doublons = require 'Doublons'
 local Empreintes = require 'Empreintes'
 local Parallele = require 'Parallele'
+local Rafales = require 'Rafales'
+local RapportHtml = require 'RapportHtml'
 local Similitude = require 'Similitude'
 local Vignettes = require 'Vignettes'
 
 local TAILLE_LOT = 1000
 local LOT_ECRITURE = 100
 local PARALLELE = 4   -- miniatures calculées en même temps
+local GRANDE_PORTEE = 20000
 local COLLECTION_DOUBLONS = Doublons.COLLECTION
--- Champs de texte recopiés sur la copie gardée quand elle n'a rien dans le champ (clés de
--- getFormattedMetadata et de setRawMetadata) : libellé, titre, légende, titre court, auteur,
--- copyright, lieu, ville, région, pays, code du pays, personnes, événement.
-local CHAMPS_TEXTE = { 'label', 'title', 'caption', 'headline', 'creator', 'copyright', 'location', 'city',
-  'stateProvince', 'country', 'isoCountryCode', 'personShown', 'event' }
-local RAPPORT = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), 'doublons.csv')
+-- Collections « à retirer » : la copie gardée ne les rejoint jamais.
+local CORBEILLES = { [Doublons.COLLECTION] = true, [Rafales.COLLECTION] = true }
+local DOSSIER_PROJET = LrPathUtils.parent(_PLUGIN.path)
+local RAPPORT = LrPathUtils.child(DOSSIER_PROJET, 'doublons.csv')
+local DOSSIER_RAPPORT = LrPathUtils.child(DOSSIER_PROJET, 'rapport-doublons')
+local RAPPORT_HTML = LrPathUtils.child(DOSSIER_RAPPORT, 'index.html')
+local DOSSIER_APERCUS = LrPathUtils.child(DOSSIER_RAPPORT, 'vignettes')
 
 local parLots = Parallele.parLots
 
@@ -58,14 +73,55 @@ local function nomFichier(chemin)
   return chemin:match('[^/\\]+$') or chemin
 end
 
--- Toutes les photos du catalogue (hors copies virtuelles), avec taille, date et chemin.
+local function nombre(n)
+  return (tostring(n):reverse():gsub('(%d%d%d)', '%1 '):reverse():gsub('^ ', ''))
+end
+
+-- Boîte de départ : confirme la portée de la recherche. Renvoie { miniatures } ou nil si l'utilisateur
+-- renonce.
+local function demanderPortee(contexte, portee, magickDispo)
+  local nb = #portee.photos
+  if nb < 2 then
+    LrDialogs.message('Fusionner les doublons',
+      'Il faut au moins deux photos : sélectionne-en plusieurs, ou affiche un dossier ou une collection.', 'info')
+    return nil
+  end
+  local f = LrView.osFactory()
+  local proprietes = LrBinding.makePropertyTable(contexte)
+  proprietes.miniatures = magickDispo
+  local description
+  if portee.genre == 'selection' then
+    description = string.format('Chercher les doublons parmi les %s photos sélectionnées.', nombre(nb))
+  else
+    description = string.format('Aucune sélection (ou une seule photo) : chercher les doublons parmi les %s photos '
+      .. 'affichées%s.', nombre(nb), portee.nom and (' (« ' .. portee.nom .. ' »)') or '')
+  end
+  local texte = description .. '\n\nUne copie n’est trouvée que si ses doublons sont aussi dans ces photos. '
+    .. 'Rien n’est modifié avant que tu aies vu le rapport et confirmé.'
+  if nb > GRANDE_PORTEE then
+    texte = texte .. '\n\nC’est beaucoup de photos : l’analyse peut durer plusieurs minutes.'
+  end
+  local colonne = { bind_to_object = proprietes, spacing = f:control_spacing() }
+  colonne[#colonne + 1] = f:static_text { title = texte, width = 480, height_in_lines = nb > GRANDE_PORTEE and 6 or 4 }
+  colonne[#colonne + 1] = f:checkbox {
+    title = magickDispo and 'Miniatures dans le rapport HTML (un peu plus long)'
+      or 'Miniatures dans le rapport HTML (ImageMagick est introuvable)',
+    value = LrView.bind('miniatures'), enabled = magickDispo,
+  }
+  local reponse = LrDialogs.presentModalDialog {
+    title = 'Fusionner les doublons', contents = f:column(colonne), actionVerb = 'Analyser',
+  }
+  if reponse ~= 'ok' then return nil end
+  return { miniatures = proprietes.miniatures and true or false }
+end
+
+-- Les photos de la portée (hors copies virtuelles), avec taille, date et chemin.
 -- Renvoie nil si l'utilisateur annule.
-local function lireCatalogue(catalogue, progression)
-  local photos = catalogue:getAllPhotos()
+local function lireCopies(catalogue, photos, progression)
   local copies = {}
   local complet = parLots(photos, TAILLE_LOT, function(lot, _, fin)
     if progression:isCanceled() then return false end
-    progression:setCaption(string.format('Lecture du catalogue : %d / %d photos', fin, #photos))
+    progression:setCaption(string.format('Lecture des photos : %d / %d', fin, #photos))
     local brutes = catalogue:batchGetRawMetadata(lot,
       { 'path', 'fileSize', 'dateTimeOriginal', 'isVirtualCopy', 'countVirtualCopies' })
     for _, photo in ipairs(lot) do
@@ -79,7 +135,7 @@ local function lireCatalogue(catalogue, progression)
     end
     progression:setPortionComplete(fin, #photos)
   end)
-  return complet and copies or nil, #photos
+  return complet and copies or nil
 end
 
 -- Images distinctes d'un groupe de candidats : une classe par empreinte, avec ses copies. Une
@@ -179,7 +235,6 @@ local function chercherGroupes(copies, progression)
     else
       for i, classe in ipairs(a.classes) do ensembles[i] = { classe } end
     end
-    local tous = {}
     for _, ensemble in ipairs(ensembles) do
       local liste = {}
       for _, classe in ipairs(ensemble) do
@@ -190,7 +245,6 @@ local function chercherGroupes(copies, progression)
             c.dimensions = string.format('%dx%d', classe.largeur, classe.hauteur)
           end
           liste[#liste + 1] = c
-          tous[#tous + 1] = c
         end
       end
       if #liste > 1 then groupes[#groupes + 1] = liste end
@@ -215,7 +269,19 @@ local function chercherGroupes(copies, progression)
   }
 end
 
--- Complète les copies des groupes : retouches, notes, mots-clés… et publication.
+-- Collections d'une photo : { id, nom (affichable), dynamique, exclue (une corbeille), objet }.
+local function lireCollections(photo)
+  local r = {}
+  for _, collection in ipairs(photo:getContainedCollections()) do
+    r[#r + 1] = {
+      objet = collection, id = collection.localIdentifier, nom = Catalogue.etiquetteCollection(collection),
+      dynamique = collection:isSmartCollection(), exclue = CORBEILLES[collection:getName()] or false,
+    }
+  end
+  return r
+end
+
+-- Complète les copies des groupes : retouches, notes, mots-clés, collections… et publication.
 local function details(catalogue, groupes, progression)
   progression:setCaption('Lecture des retouches et des métadonnées…')
   local ok, retouchees = LrTasks.pcall(function()
@@ -234,58 +300,46 @@ local function details(catalogue, groupes, progression)
   end
   local parPhoto = {}
   for _, c in ipairs(copies) do parPhoto[c.photo] = c end
+  local fait = 0
   parLots(photos, TAILLE_LOT, function(lot)
     local brutes = catalogue:batchGetRawMetadata(lot, { 'rating', 'pickStatus', 'keywords', 'gps' })
-    local formatees = catalogue:batchGetFormattedMetadata(lot, CHAMPS_TEXTE)
+    local formatees = catalogue:batchGetFormattedMetadata(lot, Doublons.CHAMPS_TEXTE)
     for _, photo in ipairs(lot) do
       local c, b, f = parPhoto[photo], brutes[photo] or {}, formatees[photo] or {}
       c.retouchee = estRetouchee[c.id] or false
-      c.note, c.drapeau, c.motsCles, c.gps = b.rating or 0, b.pickStatus or 0, b.keywords or {}, b.gps
+      c.note, c.drapeau, c.gps = b.rating or 0, b.pickStatus or 0, b.gps
+      c.motsCles = {}
+      for _, mot in ipairs(b.keywords or {}) do c.motsCles[#c.motsCles + 1] = { objet = mot, nom = mot:getName() } end
       c.textes = {}
       c.annotee = c.note > 0 or c.drapeau ~= 0 or #c.motsCles > 0
-      for _, cle in ipairs(CHAMPS_TEXTE) do
+      for _, cle in ipairs(Doublons.CHAMPS_TEXTE) do
         c.textes[cle] = f[cle] or ''
         if c.textes[cle] ~= '' then c.annotee = true end
       end
       c.publiee = #photo:getContainedPublishedCollections() > 0
+      c.collections = lireCollections(photo)
+      fait = fait + 1
+      if fait % 200 == 0 then
+        progression:setCaption(string.format('Lecture des métadonnées : %d / %d', fait, #photos))
+        LrTasks.yield()
+      end
     end
   end)
 end
 
--- La copie gardée prend la place de chaque copie retirée. À appeler dans un accès en écriture,
--- après avoir lu les collections des copies retirées (champ collections).
+-- La copie gardée prend la place de chaque copie retirée, selon le plan (Doublons.effets) montré dans le
+-- rapport. À appeler dans un accès en écriture.
 local function fusionnerGroupe(decision, corbeille)
-  local garde = decision.garde
-  local p = garde.photo
+  local e, p = decision.effets, decision.garde.photo
+  for _, col in ipairs(e.collections) do col.objet:addPhotos({ p }) end
+  for _, q in ipairs(e.quittees) do q.collection.objet:removePhotos({ q.copie.photo }) end
+  for _, mot in ipairs(e.motsCles) do p:addKeyword(mot.objet) end
+  if e.note then p:setRawMetadata('rating', e.note) end
+  if e.drapeau then p:setRawMetadata('pickStatus', 1) end
+  for _, t in ipairs(e.textes) do p:setRawMetadata(t.cle, t.valeur) end
+  if e.gps then p:setRawMetadata('gps', e.gps) end
   local retirees = {}
-  for _, c in ipairs(decision.retirees) do
-    retirees[#retirees + 1] = c.photo
-    for _, collection in ipairs(c.collections or {}) do
-      if collection.localIdentifier ~= corbeille.localIdentifier and not collection:isSmartCollection() then
-        collection:addPhotos({ p })
-        collection:removePhotos({ c.photo })
-      end
-    end
-    for _, motCle in ipairs(c.motsCles) do p:addKeyword(motCle) end
-    if c.note > garde.note then
-      p:setRawMetadata('rating', c.note)
-      garde.note = c.note
-    end
-    if c.drapeau == 1 and garde.drapeau ~= 1 then
-      p:setRawMetadata('pickStatus', 1)
-      garde.drapeau = 1
-    end
-    for _, cle in ipairs(CHAMPS_TEXTE) do
-      if garde.textes[cle] == '' and c.textes[cle] ~= '' then
-        p:setRawMetadata(cle, c.textes[cle])
-        garde.textes[cle] = c.textes[cle]
-      end
-    end
-    if not garde.gps and c.gps then
-      p:setRawMetadata('gps', c.gps)
-      garde.gps = c.gps
-    end
-  end
+  for i, c in ipairs(decision.retirees) do retirees[i] = c.photo end
   corbeille:addPhotos(retirees)
 end
 
@@ -298,10 +352,6 @@ local function fusionner(catalogue, decisions, progression)
   parLots(decisions, LOT_ECRITURE, function(lot, _, fin)
     if progression:isCanceled() then return false end
     progression:setCaption(string.format('Fusion des doublons : %d / %d groupes', fin, #decisions))
-    -- Lectures en dehors de l'accès en écriture.
-    for _, d in ipairs(lot) do
-      for _, c in ipairs(d.retirees) do c.collections = c.photo:getContainedCollections() end
-    end
     catalogue:withWriteAccessDo('Fusionner des doublons', function()
       for _, d in ipairs(lot) do fusionnerGroupe(d, corbeille) end
     end, { timeout = 120 })
@@ -324,7 +374,7 @@ local function motifRetrait(c, garde)
   return c.retouchee and 'retouchée' or ''
 end
 
-local function ecrireRapport(decisions, differents)
+local function ecrireRapportCsv(decisions, differents)
   local lignes = { { 'groupe', 'decision', 'fichier', 'detail' } }
   for i, groupe in ipairs(differents) do
     for _, c in ipairs(groupe) do
@@ -346,14 +396,70 @@ local function ecrireRapport(decisions, differents)
   Csv.ecrire(RAPPORT, lignes)
 end
 
+-- Aperçus du rapport : un petit JPEG par photo montrée, dans rapport-doublons\vignettes (réutilisé d'un
+-- rapport à l'autre). Renvoie false si l'utilisateur annule.
+local function genererApercus(decisions, differents, progression)
+  local copies, vus = {}, {}
+  local function voir(c)
+    if not vus[c.id] then
+      vus[c.id] = true
+      copies[#copies + 1] = c
+    end
+  end
+  for _, d in ipairs(decisions) do
+    voir(d.garde)
+    for _, c in ipairs(d.retirees) do voir(c) end
+  end
+  for _, groupe in ipairs(differents) do
+    for _, c in ipairs(groupe) do voir(c) end
+  end
+
+  LrFileUtils.createAllDirectories(DOSSIER_APERCUS)
+  local aFaire = {}
+  for _, c in ipairs(copies) do
+    c.fichierApercu = string.format('%s-%d.jpg', tostring(c.id), c.taille or 0)
+    c.cheminApercu = LrPathUtils.child(DOSSIER_APERCUS, c.fichierApercu)
+    if LrFileUtils.exists(c.cheminApercu) ~= 'file' then aFaire[#aFaire + 1] = c end
+  end
+  local complet = true
+  if #aFaire > 0 then
+    complet = Parallele.pourChaque(aFaire, PARALLELE, function(c) Vignettes.apercu(c.chemin, c.cheminApercu) end,
+      progression, 'Miniatures du rapport : %d / %d')
+  end
+  for _, c in ipairs(copies) do c.avecApercu = LrFileUtils.exists(c.cheminApercu) == 'file' end
+  return complet
+end
+
+local function dateDuRapport()
+  local ok, texte = LrTasks.pcall(function() return LrDate.timeToUserFormat(LrDate.currentTime(), '%Y-%m-%d %H:%M') end)
+  return ok and texte or ''
+end
+
+local function ecrireRapportHtml(modele)
+  LrFileUtils.createAllDirectories(DOSSIER_RAPPORT)
+  local f = io.open(RAPPORT_HTML, 'wb')
+  if not f then error('Impossible d’écrire ' .. RAPPORT_HTML .. ' (page ouverte dans un autre programme ?)', 0) end
+  f:write(RapportHtml.page(modele))
+  f:close()
+end
+
+local function decrirePortee(portee)
+  if portee.genre == 'selection' then return string.format('les %s photos sélectionnées', nombre(#portee.photos)) end
+  return string.format('les %s photos affichées%s', nombre(#portee.photos), portee.nom and (' (« ' .. portee.nom .. ' »)') or '')
+end
+
 LrTasks.startAsyncTask(function()
   LrFunctionContext.callWithContext('fusionnerDoublons', function(contexte)
-    local etape = 'lecture du catalogue'
+    local etape = 'choix de la portée'
     local ok, erreur = LrTasks.pcall(function()
       local catalogue = LrApplication.activeCatalog()
+      local portee = Catalogue.portee(catalogue)
+      local options = demanderPortee(contexte, portee, Vignettes.magick() ~= nil)
+      if not options then return end
       local progression = LrProgressScope { title = 'Recherche des doublons', functionContext = contexte }
 
-      local copies, nbCatalogue = lireCatalogue(catalogue, progression)
+      etape = 'lecture des photos'
+      local copies = lireCopies(catalogue, portee.photos, progression)
       if not copies then return end
       etape = 'comparaison des fichiers'
       local trouves = chercherGroupes(copies, progression)
@@ -361,7 +467,7 @@ LrTasks.startAsyncTask(function()
       local groupes, differents = trouves.groupes, trouves.differents
       if #groupes == 0 then
         progression:done()
-        LrDialogs.message('Doublons', string.format('Aucun fichier en double parmi les %d photos du catalogue.', nbCatalogue)
+        LrDialogs.message('Doublons', string.format('Aucun fichier en double parmi %s.', decrirePortee(portee))
           .. (#differents > 0 and string.format('\n%d groupes de photos de même nom d’origine et même date ont '
             .. 'des versions distinctes (retouchées, recadrées…) : elles sont toutes conservées.', #differents) or ''), 'info')
         return
@@ -372,30 +478,56 @@ LrTasks.startAsyncTask(function()
       local decisions, aFusionner = {}, {}
       local nbRetirees, nbReduites, nbAVerifier = 0, 0, 0
       for i, g in ipairs(groupes) do
-        decisions[i] = Doublons.decider(g)
-        if decisions[i].aVerifier then
+        local d = Doublons.decider(g)
+        decisions[i] = d
+        if d.aVerifier then
           nbAVerifier = nbAVerifier + 1
         else
-          aFusionner[#aFusionner + 1] = decisions[i]
-          nbRetirees = nbRetirees + #decisions[i].retirees
-          for _, c in ipairs(decisions[i].retirees) do
-            if c.empreinte ~= decisions[i].garde.empreinte then nbReduites = nbReduites + 1 end
+          d.effets = Doublons.effets(d)
+          aFusionner[#aFusionner + 1] = d
+          nbRetirees = nbRetirees + #d.retirees
+          for _, c in ipairs(d.retirees) do
+            if c.empreinte ~= d.garde.empreinte then nbReduites = nbReduites + 1 end
           end
         end
       end
+
+      etape = 'miniatures du rapport'
+      if options.miniatures and not genererApercus(decisions, differents, progression) then return end
+
+      -- Remarques du rapport et du bilan.
+      local remarques = {}
+      if trouves.magickAbsent then
+        remarques[#remarques + 1] = 'ImageMagick est introuvable : les copies réduites ou recompressées n’ont pas '
+          .. 'été cherchées (seuls les fichiers de même image sont fusionnés).'
+      end
+      if trouves.sansMiniature > 0 then
+        remarques[#remarques + 1] = string.format('%d images n’ont pas pu être comparées par ImageMagick '
+          .. '(format non lu) : elles sont conservées.', trouves.sansMiniature)
+      end
+      if trouves.illisibles > 0 then
+        remarques[#remarques + 1] = string.format('%d fichiers illisibles (absents ou hors ligne) n’ont pas pu être comparés.',
+          trouves.illisibles)
+      end
+      if not options.miniatures then remarques[#remarques + 1] = 'Rapport sans miniatures.' end
+
       etape = 'écriture du rapport'
-      ecrireRapport(decisions, differents)
+      ecrireRapportCsv(decisions, differents)
+      ecrireRapportHtml({
+        portee = decrirePortee(portee), date = dateDuRapport(), collection = COLLECTION_DOUBLONS,
+        decisions = decisions, differents = differents, notes = remarques,
+        vignette = function(c) return c.avecApercu and ('vignettes/' .. c.fichierApercu) or nil end,
+      })
       progression:done()
 
       local message = string.format(
-        '%d groupes de copies d’une même photo : %d copies en trop%s.\n\n'
-        .. 'Dans chaque groupe, la copie gardée est la plus grande image ; à image identique, la copie '
-        .. 'retouchée s’il y en a une, sinon la mieux rangée (pas dans « Désordre » ni dans un dossier '
-        .. '« …-manquantes », dossier nommé plutôt que daté). Elle prend la place des autres dans leurs '
-        .. 'collections et récupère leurs mots-clés, note, drapeau, position GPS et textes (libellé, titre, '
-        .. 'légende, auteur, lieu, ville, pays…) quand elle n’en a pas. '
-        .. 'Les autres copies sont rassemblées dans la collection « %s », à retirer ensuite du catalogue.',
-        #aFusionner, nbRetirees,
+        '%s : %d groupes de copies d’une même photo, %d copies en trop%s.\n\n'
+        .. 'Pour chaque groupe, le rapport montre la copie gardée (la plus grande image ; à image identique, la '
+        .. 'retouchée, puis la mieux rangée), ce qui est retiré, et ce qui change dans les collections et les '
+        .. 'métadonnées. Clique sur « Voir le rapport » (il s’ouvre dans ton navigateur) : rien n’est modifié '
+        .. 'tant que tu ne cliques pas sur « Fusionner ». Les copies en trop sont rassemblées dans la collection '
+        .. '« %s », à retirer ensuite du catalogue.',
+        decrirePortee(portee):gsub('^les', 'Parmi les'), #aFusionner, nbRetirees,
         nbReduites > 0 and string.format(' (dont %d copies réduites ou recompressées)', nbReduites) or '',
         COLLECTION_DOUBLONS)
       if nbAVerifier > 0 then
@@ -404,27 +536,18 @@ LrTasks.startAsyncTask(function()
       end
       if #differents > 0 then
         message = message .. string.format('\n%d groupes de photos de même nom d’origine et même date ont des '
-          .. 'versions distinctes : image différente (retouche dans un éditeur externe, recadrage…) ou nom '
-          .. 'de retouche (« -Modifier », « -Modifié », « _filtered », « DxO_… »). Elles sont toutes conservées.',
-          #differents)
+          .. 'versions distinctes (image différente, ou nom de retouche : « -Modifier », « -Modifié », « _filtered », '
+          .. '« DxO_… »). Elles sont toutes conservées.', #differents)
       end
-      if trouves.magickAbsent then
-        message = message .. '\nImageMagick est introuvable : les copies réduites ou recompressées n’ont pas '
-          .. 'été cherchées (seuls les fichiers de même image sont fusionnés).'
+      for _, r in ipairs(remarques) do
+        if r ~= 'Rapport sans miniatures.' then message = message .. '\n' .. r end
       end
-      if trouves.sansMiniature > 0 then
-        message = message .. string.format('\n%d images n’ont pas pu être comparées par ImageMagick '
-          .. '(format non lu) : elles sont conservées.', trouves.sansMiniature)
-      end
-      if trouves.illisibles > 0 then
-        message = message .. string.format('\n%d fichiers illisibles (absents ou hors ligne) n’ont pas pu être comparés.', trouves.illisibles)
-      end
-      message = message .. '\n\nDétail des décisions : ' .. RAPPORT
+      message = message .. '\n\nRapport : ' .. RAPPORT_HTML
 
       local choix
       repeat
         choix = LrDialogs.confirm('Fusionner les doublons ?', message, 'Fusionner', 'Annuler', 'Voir le rapport')
-        if choix == 'other' then LrShell.revealInShell(RAPPORT) end
+        if choix == 'other' then LrHttp.openUrlInBrowser(RapportHtml.urlFichier(RAPPORT_HTML)) end
       until choix ~= 'other'
       if choix ~= 'ok' or #aFusionner == 0 then return end
 

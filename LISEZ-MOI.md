@@ -79,10 +79,15 @@ Dans Lightroom : Bibliothèque → Options du module externe → …
 ### Fusionner les doublons…
 
 Une même photo importée plusieurs fois (dossier « Désordre », copies `-2`, `-3`, `(2)`, versions `-Modifier`…).
-La commande cherche, dans tout le catalogue, les photos de même nom d'origine (les suffixes de copie ou de
-retouche sont ignorés : `-2`, `(2)`, `-Modifier`, `-Modifié-2026-08-02T22-37-43`, `_filtered`,
-`-20260821-DxO_DeepPRIME XD3`) et de même date de prise de vue, puis compare les **images**, pas les fichiers
-(des métadonnées XMP différentes ne font pas des fichiers différents) :
+
+**Sur quelles photos ?** Sur les photos **sélectionnées** s'il y en a au moins deux, sinon sur toutes les photos
+**affichées** dans la grille (le dossier ou la collection ouverte). Une boîte l'annonce avant de commencer. Une copie
+n'est trouvée que si ses doublons sont aussi dans ces photos : sélectionne une année, un dossier parent…
+
+La commande cherche les photos de même nom d'origine (les suffixes de copie ou de retouche sont ignorés : `-2`,
+`(2)`, `-Modifier`, `-Modifié-2026-08-02T22-37-43`, `_filtered`, `-20260821-DxO_DeepPRIME XD3`) et de même date de
+prise de vue, puis compare les **images**, pas les fichiers (des métadonnées XMP différentes ne font pas des fichiers
+différents) :
 
 - image identique : doublons, on garde un seul fichier ;
 - même vue en plus petit ou recompressée (miniature ImageMagick de 16 × 16, même forme, mêmes couleurs) : on garde la
@@ -93,8 +98,19 @@ retouche sont ignorés : `-2`, `(2)`, `-Modifier`, `-Modifié-2026-08-02T22-37-4
 La copie gardée est la plus grande image, puis celle qui est retouchée dans Lightroom, puis la mieux rangée. Elle prend
 la place des autres dans leurs collections et récupère mots-clés, note, drapeau, position GPS, et les champs de texte
 (titre, légende, auteur, lieu, ville, pays…) qu'elle n'a pas. Les autres copies vont dans la collection
-« Doublons à retirer » (jamais supprimées par le module : Ctrl+A, Suppr dans cette collection). Le détail est dans
-`doublons.csv`. « Recréer les albums » ignore cette collection.
+« Doublons à retirer » (jamais supprimées par le module : Ctrl+A, Suppr dans cette collection).
+« Recréer les albums » ignore cette collection tant qu'elle contient des copies.
+
+**Rapport HTML avant toute modification.** Après l'analyse, le module écrit `rapport-doublons\index.html` et propose
+de le voir (bouton « Voir le rapport », il s'ouvre dans le navigateur) avant que tu confirmes. Pour chaque groupe : les
+miniatures des copies, la copie gardée et pourquoi (« la plus grande image », « retouchée dans Lightroom », « dossier
+mieux rangé »…), ce qui est retiré, les collections que la copie gardée rejoint ou que les copies retirées quittent,
+les mots-clés, la note, le drapeau, les textes et la position GPS recopiés. Il montre aussi les groupes « à vérifier »
+(rien n'est fait pour eux) et les versions conservées à part. Les chiffres clés (copies retirées, Go libérés,
+collections modifiées) ouvrent la page, et une barre de filtre cherche par nom ou dossier. Le rapport est construit à partir du même plan
+que celui qui est appliqué ensuite : il ne peut pas annoncer autre chose. Les miniatures sont des aperçus JPEG de
+220 pixels écrits dans `rapport-doublons\vignettes\` (réutilisés d'un rapport à l'autre ; case à décocher dans la
+boîte de départ pour s'en passer). Le détail est aussi dans `doublons.csv`.
 
 ### Réduire les rafales…
 
@@ -136,7 +152,7 @@ Depuis mars 2025, l'API ne permet de compléter que les albums créés par l'app
 ## Tests
 
 ```
-node tests/lancer.mjs             # les cinq suites (une minute)
+node tests/lancer.mjs             # les six suites (une minute)
 node tests/lancer.mjs --mutants   # puis casse une règle à la fois : les tests doivent échouer (quelques minutes)
 ```
 
@@ -176,7 +192,7 @@ Lightroom et le vrai ImageMagick.
 | `chrome.mjs`, `csv.mjs` | Code commun aux deux scripts |
 | `connexion-google-photos.mjs` | Connexion à Google pour l'export « Google Photos » (lancé par le module au besoin) |
 | `rafales-a-blanc.mjs` | Rapport HTML des rafales d'un dossier, sans rien modifier |
-| `albums-google-photos.lrplugin` | Module Lightroom. Recréer les albums : `RecreerAlbums.lua` (principal), `Correspondance.lua` (retrouver une photo), `Epoques.lua` (périodes), `Noms.lua` (noms des collections). Doublons : `FusionnerDoublons.lua`, `Doublons.lua`, `Empreintes.lua`, `Similitude.lua`. Rafales : `ReduireRafales.lua`, `Rafales.lua`. Export Google Photos : `ServiceGooglePhotos.lua`, `GooglePhotos.lua`, `Json.lua`, `presets\`. Commun : `Vignettes.lua` (ImageMagick), `Parallele.lua`, `Catalogue.lua`, `Csv.lua` |
+| `albums-google-photos.lrplugin` | Module Lightroom. Recréer les albums : `RecreerAlbums.lua` (principal), `Correspondance.lua` (retrouver une photo), `Epoques.lua` (périodes), `Noms.lua` (noms des collections). Doublons : `FusionnerDoublons.lua`, `Doublons.lua`, `Empreintes.lua`, `Similitude.lua`, `RapportHtml.lua` (page du rapport). Rafales : `ReduireRafales.lua`, `Rafales.lua`. Export Google Photos : `ServiceGooglePhotos.lua`, `GooglePhotos.lua`, `Json.lua`, `presets\`. Commun : `Vignettes.lua` (ImageMagick), `Parallele.lua`, `Catalogue.lua`, `Csv.lua` |
 | `tests\` | Tests du module, hors de Lightroom (`node tests/lancer.mjs`) |
 | `albums-tous.csv`, `photos-albums-tous.csv` | Export des albums (inutile d'y toucher) |
 | `photos-hors-album.csv` | Photos de la bibliothèque qui ne sont dans aucun album, au même format |

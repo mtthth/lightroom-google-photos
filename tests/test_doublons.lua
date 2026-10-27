@@ -106,12 +106,61 @@ verifier('deux retirées', #d.retirees, 2)
 d = Doublons.decider({ copie(7, P .. 'x\\a.jpg'), copie(3, P .. 'y\\a.jpg') })
 verifier('sinon la première importée', d.garde.id, 3)
 
+-- pourquoi : le premier critère qui départage la copie gardée de la suivante
+d = Doublons.decider({ copie(1, P .. 'a\\a.jpg', { pixels = 1000 }), copie(2, P .. 'b\\a.jpg', { pixels = 4000 }) })
+verifier('pourquoi : la plus grande image', d.pourquoi, 'la plus grande image')
+d = Doublons.decider({ copie(1, P .. 'a\\a.jpg', { pixels = 4000, octets = 100 }), copie(2, P .. 'b\\a.jpg', { pixels = 4000, octets = 900, empreinte = 'x' }) })
+verifier('pourquoi : le plus lourd à dimensions égales', d.pourquoi, 'le fichier le plus lourd (mêmes dimensions)')
+d = Doublons.decider({ copie(1, P .. 'a\\a.jpg'), copie(2, P .. 'b\\a.jpg', { retouchee = true }) })
+verifier('pourquoi : retouchée', d.pourquoi, 'retouchée dans Lightroom')
+d = Doublons.decider({ copie(1, A .. 'Désordre\\2018\\a.jpg'), copie(2, P .. '201x\\2018\\180818. Andernos\\a.jpg') })
+verifier('pourquoi : dossier mieux rangé', d.pourquoi, 'dossier mieux rangé')
+d = Doublons.decider({ copie(1, P .. 'x\\a.jpg'), copie(2, P .. 'y\\a-2.jpg') })
+verifier('pourquoi : nom sans suffixe', d.pourquoi, 'nom sans suffixe de copie')
+d = Doublons.decider({ copie(9, P .. 'x\\a.jpg'), copie(3, P .. 'y\\a.jpg') })
+verifier('pourquoi : la première importée', d.pourquoi, 'importée la première')
+verifier('même image', d.memeImage, true)
+d = Doublons.decider({ copie(1, P .. 'a\\a.jpg', { pixels = 1000, empreinte = 'a' }), copie(2, P .. 'b\\a.jpg', { pixels = 4000, empreinte = 'b' }) })
+verifier('copie réduite : pas la même image', d.memeImage, false)
+
+-- effets : ce que la fusion change
+local function col(id, nom, extra) local c = { id = id, nom = nom, dynamique = false, exclue = false }; for k, v in pairs(extra or {}) do c[k] = v end; return c end
+local function mot(nom) return { nom = nom, objet = 'objet:' .. nom } end
+local gardee = copie(1, P .. 'a\\a.jpg', { collections = { col(1, 'Album A') }, motsCles = { mot('x') }, note = 2, drapeau = 0,
+  textes = { city = '', creator = 'Moi' } })
+local r1 = copie(2, A .. 'Désordre\\a.jpg', { collections = { col(1, 'Album A'), col(2, 'Album B'), col(3, 'Dynamique', { dynamique = true }),
+  col(4, 'Doublons à retirer', { exclue = true }) }, motsCles = { mot('x'), mot('y') }, note = 4, drapeau = 1,
+  textes = { city = 'Gien', creator = 'Autre' }, gps = { latitude = 1 } })
+local r2 = copie(3, A .. 'Désordre\\b.jpg', { collections = { col(2, 'Album B'), col(5, 'Album C') }, motsCles = { mot('y'), mot('z') },
+  note = 3, textes = { city = 'Orléans' }, gps = { latitude = 2 } })
+local e = Doublons.effets({ garde = gardee, retirees = { r1, r2 } })
+verifier('effets : collections rejointes', #e.collections, 2)
+verifier('effets : Album B', e.collections[1].nom, 'Album B')
+verifier('effets : Album C', e.collections[2].nom, 'Album C')
+verifier('effets : collections quittées (statiques, hors corbeille)', #e.quittees, 4)
+verifier('effets : mots-clés ajoutés une fois', #e.motsCles, 2)
+verifier('effets : y puis z', e.motsCles[1].nom .. e.motsCles[2].nom, 'yz')
+verifier('effets : note la plus haute', e.note, 4)
+verifier('effets : drapeau', e.drapeau, 1)
+verifier('effets : un seul texte recopié (le premier)', #e.textes, 1)
+verifier('effets : ville', e.textes[1].cle .. '=' .. e.textes[1].valeur, 'city=Gien')
+verifier('effets : gps de la première copie qui en a', e.gps.latitude, 1)
+e = Doublons.effets({ garde = copie(1, P .. 'a\\a.jpg', { collections = {}, motsCles = {}, note = 5, drapeau = 1, textes = {}, gps = { latitude = 9 } }),
+  retirees = { copie(2, P .. 'b\\a.jpg', { collections = {}, motsCles = {}, note = 3, drapeau = 1, textes = {}, gps = { latitude = 1 } }) } })
+verifier('effets : rien à changer (note)', e.note, nil)
+verifier('effets : rien à changer (drapeau)', e.drapeau, nil)
+verifier('effets : rien à changer (gps)', e.gps, nil)
+
 local g = Doublons.grouper({ { k = 'a' }, { k = 'b' }, { k = 'a' }, { k = nil }, { k = 'c' }, { k = 'c' } }, function(e) return e.k end)
 verifier('grouper', #g, 2)
 verifier('grouper ordre', g[1][1].k, 'a')
 
 -- Faux Lightroom ----------------------------------------------------------------------------
-_PLUGIN = { path = PLUGIN }
+-- Le module écrit ses rapports à côté de son dossier : on le place dans le dossier temporaire du test.
+local PROJET = SCRATCH .. '/projet-doublons'
+os.execute('rmdir /s /q "' .. PROJET:gsub('/', '\\') .. '" 2>nul')
+os.execute('mkdir "' .. PROJET:gsub('/', '\\') .. '" 2>nul')
+_PLUGIN = { path = PROJET .. '/albums-google-photos.lrplugin' }
 local DOSSIER = SCRATCH .. '/doublons'
 os.execute('rmdir /s /q "' .. DOSSIER:gsub('/', '\\') .. '" 2>nul')
 os.execute('mkdir "' .. DOSSIER:gsub('/', '\\') .. '" 2>nul')
@@ -124,12 +173,15 @@ local function ecrire(nom, contenu)
 end
 
 local catalogue, collections, journal, dialogues, reponses
+local reponsePortee, miniaturesVoulues, boitesPortee = 'ok', nil, {}
+local function motCle(nom) return { nom = nom, getName = function() return nom end } end
 local function nouvelleCollection(nom, intelligente)
   local c = { nom = nom, photos = {}, localIdentifier = #collections + 1000, intelligente = intelligente }
   function c:addPhotos(liste) for _, p in ipairs(liste) do self.photos[p] = true end end
   function c:removePhotos(liste) for _, p in ipairs(liste) do self.photos[p] = nil end end
   function c:isSmartCollection() return self.intelligente or false end
   function c:getName() return self.nom end
+  function c:getParent() return nil end
   function c:getPhotos() local r = {} for p in pairs(self.photos) do r[#r + 1] = p end table.sort(r, function(a, b) return a.localIdentifier < b.localIdentifier end) return r end
   collections[#collections + 1] = c
   return c
@@ -161,7 +213,19 @@ local mocks = {
     confirm = function(titre, texte) dialogues[#dialogues + 1] = { titre = titre, texte = texte }; return table.remove(reponses, 1) or 'cancel' end,
     message = function(titre, texte) dialogues[#dialogues + 1] = { titre = titre, texte = texte } end,
     runOpenPanel = function() return { DOSSIER .. '/photos-albums-test.csv' } end,
+    -- Boîte de portée de « Fusionner les doublons » : on garde ses paramètres et on répond comme l'utilisateur.
+    presentModalDialog = function(args)
+      boitesPortee[#boitesPortee + 1] = args
+      if miniaturesVoulues ~= nil then args.contents.bind_to_object.miniatures = miniaturesVoulues end
+      return reponsePortee
+    end,
   },
+  LrBinding = { makePropertyTable = function() return {} end },
+  LrView = {
+    osFactory = function() return setmetatable({}, { __index = function() return function(_, t) return t end end }) end,
+    bind = function(cle) return cle end,
+  },
+  LrHttp = { openUrlInBrowser = function(url) journal[#journal + 1] = 'navigateur ' .. url end },
   LrFunctionContext = { callWithContext = function(_, f) return f({}) end },
   LrPathUtils = {
     child = function(a, b) return a .. '/' .. b end,
@@ -176,12 +240,13 @@ local mocks = {
   LrShell = { revealInShell = function(p) journal[#journal + 1] = 'révéler ' .. p end },
   LrTasks = { pcall = pcall, yield = function() end, startAsyncTask = function(f) f() end, sleep = function() end },
   LrMD5 = { digest = function(s) return 'md5[' .. s .. ']' end },
-  LrDate = { currentTime = function() return 0 end },
+  LrDate = { currentTime = function() return 0 end, timeToUserFormat = function() return '2026-10-27 14:05' end },
   LrFileUtils = {
     exists = function(p) local f = io.open(p, 'rb'); if f then f:close(); return 'file' end return false end,
     fileAttributes = function(p) local f = io.open(p, 'rb'); if not f then return nil end local t = f:seek('end'); f:close(); return { fileSize = t } end,
     readFile = function(p) local fh = io.open(p, 'rb'); if not fh then return nil end local o = fh:read('*a'); fh:close(); return o end,
-    delete = function() end,
+    delete = function(p) os.remove(p) end,
+    createAllDirectories = function(p) os.execute('mkdir "' .. p:gsub('/', '\\') .. '" 2>nul') end,
   },
 }
 function import(nom) return assert(mocks[nom], 'module inconnu : ' .. nom) end
@@ -212,11 +277,27 @@ verifier('heic : mdat différent', Empreintes.empreinteContenu(heic('EXIF', 'IMG
 verifier('autre format : tout le fichier', Empreintes.empreinteContenu('RIFF....AVI1'), 'brut:md5[RIFF....AVI1]')
 verifier('jpeg tronqué', Empreintes.empreinteContenu('\255\216\255\225\0'):sub(1, 5), 'brut:')
 
+local function photoTaille(chemin)
+  local fh = io.open(chemin, 'rb')
+  local n = fh and fh:seek('end') or 0
+  if fh then fh:close() end
+  return n
+end
 local function nouveauCatalogue(photos)
   collections = {}
   journal, dialogues = {}, {}
   catalogue = { photos = photos }
   function catalogue:getAllPhotos() return self.photos end
+  -- Sélection : liste de photos (nil = rien de sélectionné). Comme dans Lightroom, getTargetPhotos renvoie
+  -- toute la grille quand rien n'est sélectionné, et getMultipleSelectedOrAllPhotos toute la grille tant
+  -- qu'il y a moins de deux photos sélectionnées.
+  function catalogue:getTargetPhoto() return self.selection and self.selection[1] or nil end
+  function catalogue:getTargetPhotos() return self.selection or self.photos end
+  function catalogue:getMultipleSelectedOrAllPhotos()
+    if self.selection and #self.selection > 1 then return self.selection end
+    return self.photos
+  end
+  function catalogue:getActiveSources() return { { getName = function() return 'Dossier test' end } } end
   function catalogue:batchGetRawMetadata(lot)
     local r = {}
     for _, p in ipairs(lot) do
@@ -294,7 +375,20 @@ local function decale(sig, d, n)
 end
 local miniatures = {}
 local function vignette(chemin, sig, l, h) miniatures[chemin] = { signature = sig, largeur = l, hauteur = h } end
-package.loaded['Vignettes'] = { magick = function() return 'magick.exe' end, signature = function(chemin) return miniatures[chemin] end }
+local apercusDemandes, apercusEchec = {}, {}
+package.loaded['Vignettes'] = {
+  magick = function() return 'magick.exe' end,
+  signature = function(chemin) return miniatures[chemin] end,
+  apercu = function(chemin, destination)
+    apercusDemandes[#apercusDemandes + 1] = chemin
+    if apercusEchec[chemin] then return nil end
+    local fh = io.open(destination, 'wb')
+    if not fh then return nil end
+    fh:write('JPEG-APERCU')
+    fh:close()
+    return true
+  end,
+}
 
 -- PHOTO_9 : la grande dans « desordre », une copie réduite dans un dossier nommé : on garde la grande.
 local g9 = ecrire('desordre/2018/PHOTO_9.jpg', jpeg('<a/>', 'PIXELS-9-GRAND'))
@@ -337,9 +431,11 @@ for _, c in ipairs({ g2, p2, gw, pw }) do vignette(c, uniforme(90), 4000, 3000) 
 local m1a = ecrire('perso/m/PHOTO_1-Modifier.jpg', jpeg('<a/>', 'PIXELS-1-M'))
 local m1b = ecrire('perso/n/PHOTO_1-Modifier.jpg', jpeg('<b long="oui"/>', 'PIXELS-1-M'))
 
+apercusEchec[g7] = true   -- pas d'aperçu pour celle-là : le rapport l'indique
+
 local photos = {
   nouvellePhoto(10, orig, { date = d1, note = 2, createur = 'Matthieu', pays = '' }),
-  nouvellePhoto(11, desordre, { date = d1, note = 4, drapeau = 1, libelle = 'Rouge', titre = 'Plage', ville = 'Andernos-les-Bains', pays = 'France', createur = 'Un autre', motsCles = { 'Andernos' }, gps = { latitude = 44.7, longitude = -1.1 } }),
+  nouvellePhoto(11, desordre, { date = d1, note = 4, drapeau = 1, libelle = 'Rouge', titre = 'Plage', ville = 'Andernos-les-Bains', pays = 'France', createur = 'Un autre', motsCles = { motCle('Andernos') }, gps = { latitude = 44.7, longitude = -1.1 } }),
   nouvellePhoto(12, manquante, { date = d1, drapeau = -1 }),
   nouvellePhoto(13, recompressee1, { date = d1 }),
   nouvellePhoto(14, recompressee2, { date = d1 }),
@@ -389,20 +485,30 @@ epoque:addPhotos({ photos[1], photos[2], photos[3] })
 local intelligente = nouvelleCollection('Collection dynamique', true)
 intelligente:addPhotos({ photos[2] })
 
+-- Portée : rien n'est sélectionné, le module prend toutes les photos affichées.
 reponses = { 'other', 'ok' }   -- « Voir le rapport », puis « Fusionner »
 dofile(PLUGIN .. '/FusionnerDoublons.lua')
 
+verifier('une boîte de portée', #boitesPortee, 1)
+local boite = boitesPortee[1] and boitesPortee[1].contents[1].title or ''
+verifier('portée : aucune sélection', boite:find('Aucune sélection', 1, true) ~= nil, true)
+verifier('portée : nombre de photos', boite:find('parmi les ' .. #photos .. ' photos affichées', 1, true) ~= nil, true)
+verifier('portée : nom de la source', boite:find('« Dossier test »', 1, true) ~= nil, true)
+verifier('portée : rien n’est modifié avant confirmation', boite:find('Rien n’est modifié', 1, true) ~= nil, true)
+
 local texte = dialogues[1] and dialogues[1].texte or ''
 verifier('dialogue de confirmation', dialogues[1] and dialogues[1].titre, 'Fusionner les doublons ?')
-verifier('compte', texte:match('^(%d+) groupes de copies'), '5')
-verifier('copies en trop', texte:match(' : (%d+) copies en trop'), '7')
+verifier('compte', texte:match('(%d+) groupes de copies d’une même photo'), '5')
+verifier('le bilan nomme la portée', texte:match('^Parmi les %d+ photos affichées'), 'Parmi les ' .. #photos .. ' photos affichées')
+verifier('copies en trop', texte:match(', (%d+) copies en trop'), '7')
 verifier('dont réduites', texte:match('%(dont (%d+) copies réduites ou recompressées%)'), '2')
 verifier('à vérifier', texte:match('(%d+) groupes à vérifier'), '2')
 verifier('images différentes', texte:match('(%d+) groupes de photos de même nom d’origine et même date ont des versions distinctes'), '8')
 verifier('images sans miniature', texte:match('(%d+) images n’ont pas pu être comparées'), '4')
 verifier('ImageMagick présent', texte:match('ImageMagick est introuvable'), nil)
 verifier('illisibles', texte:match('(%d+) fichiers illisibles'), nil)
-verifier('rapport révélé', journal[1] and journal[1]:match('doublons%.csv$') ~= nil, true)
+verifier('« Voir le rapport » ouvre la page HTML dans le navigateur',
+  journal[1] and journal[1]:match('^navigateur file:///.*/projet%-doublons/rapport%-doublons/index%.html$') ~= nil, true)
 local garde = photos[1]
 verifier('album repris par la gardée', album.photos[garde], true)
 verifier('album quitté par la désordre', album.photos[photos[2]], nil)
@@ -417,7 +523,7 @@ verifier('titre', garde.textes.title, 'Plage')
 verifier('ville recopiée', garde.textes.city, 'Andernos-les-Bains')
 verifier('pays recopié', garde.textes.country, 'France')
 verifier('auteur déjà renseigné : conservé', garde.textes.creator, 'Matthieu')
-verifier('mot-clé', garde.motsCles[1], 'Andernos')
+verifier('mot-clé', garde.motsCles[1] and garde.motsCles[1]:getName(), 'Andernos')
 verifier('gps', garde.gps and garde.gps.latitude, 44.7)
 local corbeille
 for _, c in ipairs(collections) do if c.nom == 'Doublons à retirer' then corbeille = c end end
@@ -447,7 +553,7 @@ verifier('DSCF : -2 retirée', corbeille and corbeille.photos[photos[9]], true)
 verifier('DSCF : -2-Modifier (image identique, nom de retouche) conservé', corbeille and corbeille.photos[photos[11]], nil)
 verifier('DSCF : -Modifier retouchée conservée', corbeille and corbeille.photos[photos[12]], nil)
 
-local RAPPORT = PLUGIN:match('^(.*)[/\\]') .. '/doublons.csv'
+local RAPPORT = PROJET .. '/doublons.csv'
 local f = io.open(RAPPORT, 'rb')
 local rapport = f and f:read('*a') or ''
 if f then f:close() end
@@ -474,12 +580,103 @@ verifier('rapport : réduite retouchée à vérifier',
   rapport:find('à vérifier : une copie à retirer est retouchée ou a des copies virtuelles', 1, true) ~= nil, true)
 os.remove(RAPPORT)
 
+-- Rapport HTML : même plan que celui qui a été appliqué.
+local HTML = PROJET .. '/rapport-doublons/index.html'
+local fh = io.open(HTML, 'rb')
+local html = fh and fh:read('*a') or ''
+if fh then fh:close() end
+local function compter(motif)
+  local n = 0
+  for _ in html:gmatch(motif) do n = n + 1 end
+  return n
+end
+verifier('rapport HTML écrit', #html > 1000, true)
+verifier('HTML : groupes à fusionner', compter('<article class="carte fusion"'), 5)
+verifier('HTML : groupes à vérifier', compter('<article class="carte verifier"'), 2)
+verifier('HTML : versions conservées à part', compter('<article class="carte apart"'), 8)
+verifier('HTML : rien n’a été modifié', html:find('Rien n’a été modifié dans Lightroom', 1, true) ~= nil, true)
+verifier('HTML : la portée', html:find('les ' .. #photos .. ' photos affichées (« Dossier test »)', 1, true) ~= nil, true)
+verifier('HTML : date', html:find('2026-10-27 14:05', 1, true) ~= nil, true)
+verifier('HTML : la collection où vont les copies', html:find('collection « Doublons à retirer » : rien n’est supprimé', 1, true) ~= nil, true)
+verifier('HTML : pourquoi la grande est gardée', html:find('Copie gardée : la plus grande image.', 1, true) ~= nil, true)
+verifier('HTML : pourquoi le nom propre est gardé', html:find('Copie gardée : nom sans suffixe de copie.', 1, true) ~= nil, true)
+verifier('HTML : collection rejointe', html:find('La copie gardée rejoint 1 collection : « Google Photos - albums / Andernos »', 1, true) ~= nil, true)
+verifier('HTML : collections quittées',
+  html:find('Les copies retirées sortent de : « Google Photos - albums / Andernos », « Époque Andernos »', 1, true) ~= nil, true)
+verifier('HTML : la collection dynamique n’est pas touchée', html:find('Collection dynamique', 1, true), nil)
+verifier('HTML : mots-clés ajoutés', html:find('Mots-clés ajoutés : « Andernos »', 1, true) ~= nil, true)
+verifier('HTML : note relevée', html:find('Note relevée à ★★★★', 1, true) ~= nil, true)
+verifier('HTML : drapeau', html:find('Drapeau « retenue » recopié', 1, true) ~= nil, true)
+verifier('HTML : ville recopiée', html:find('Ville recopié(e) : Andernos-les-Bains', 1, true) ~= nil, true)
+verifier('HTML : l’auteur déjà renseigné n’est pas recopié', html:find('Auteur recopié', 1, true), nil)
+verifier('HTML : position GPS', html:find('Position GPS recopiée', 1, true) ~= nil, true)
+verifier('HTML : copie réduite annoncée', html:find('copie réduite ou recompressée', 1, true) ~= nil, true)
+verifier('HTML : groupe à vérifier', html:find('À vérifier : plusieurs copies retouchées. <b>Rien ne sera fait pour ce groupe.</b>', 1, true) ~= nil, true)
+verifier('HTML : version conservée d’après son nom', html:find('Un fichier dont le nom annonce une retouche', 1, true) ~= nil, true)
+verifier('HTML : aperçu d’une photo montrée', html:find('<img src="vignettes/50-', 1, true) ~= nil, true)
+verifier('HTML : photo sans aperçu', html:find('pas d’aperçu', 1, true) ~= nil, true)
+verifier('HTML : l’aperçu est écrit sur le disque', io.open(PROJET .. '/rapport-doublons/vignettes/50-' .. photoTaille(g9) .. '.jpg', 'rb') ~= nil, true)
+verifier('HTML : rien d’exécutable', html:find('<script>', 1, true) ~= nil and html:find('</script>', 1, true) ~= nil, true)
+local nbApercus = #apercusDemandes
+verifier('aperçus demandés pour chaque photo montrée', nbApercus > 20, true)
+
 -- Relance : même proposition, rien n'est cassé.
 reponses = { 'cancel' }
 dialogues = {}
 dofile(PLUGIN .. '/FusionnerDoublons.lua')
-verifier('relance : même proposition', dialogues[1] and dialogues[1].texte:match('^(%d+) groupes de copies'), '5')
+verifier('relance : même proposition', dialogues[1] and dialogues[1].texte:match('(%d+) groupes de copies d’une même photo'), '5')
+verifier('relance : les aperçus déjà écrits ne sont pas refaits', #apercusDemandes, nbApercus + 1)   -- seule g7, sans aperçu, est retentée
+-- Les copies retirées sont maintenant dans « Doublons à retirer » : la page ne doit pas croire que la copie
+-- gardée doive rejoindre cette collection, ni que les copies en sortent.
+fh = io.open(HTML, 'rb'); html = fh and fh:read('*a') or ''; if fh then fh:close() end
+verifier('relance : la gardée ne rejoint pas la corbeille', html:find('rejoint [^<]*« Doublons à retirer »'), nil)
+verifier('relance : les copies ne « sortent » pas de la corbeille', html:find('sortent de : [^<]*« Doublons à retirer »'), nil)
 os.remove(RAPPORT)
+
+-- Portée : une sélection. Seules les photos sélectionnées sont examinées, même si d'autres ont des doublons.
+catalogue.selection = { PH.g9, PH.p9 }
+reponses = { 'cancel' }
+boitesPortee, dialogues = {}, {}
+dofile(PLUGIN .. '/FusionnerDoublons.lua')
+local boiteSelection = boitesPortee[1] and boitesPortee[1].contents[1].title or ''
+verifier('sélection : la boîte nomme la sélection', boiteSelection:find('parmi les 2 photos sélectionnées', 1, true) ~= nil, true)
+verifier('sélection : un seul groupe trouvé', dialogues[1] and dialogues[1].texte:match('(%d+) groupes de copies d’une même photo'), '1')
+verifier('sélection : le bilan nomme la sélection', dialogues[1] and dialogues[1].texte:match('^Parmi les 2 photos sélectionnées') ~= nil, true)
+
+-- Une seule photo sélectionnée : on prend toute la grille.
+catalogue.selection = { PH.g9 }
+boitesPortee, dialogues = {}, {}
+dofile(PLUGIN .. '/FusionnerDoublons.lua')
+verifier('une seule photo sélectionnée : toute la grille',
+  (boitesPortee[1] and boitesPortee[1].contents[1].title or ''):find('parmi les ' .. #photos .. ' photos affichées', 1, true) ~= nil, true)
+catalogue.selection = nil
+
+-- Renoncer dans la boîte de portée : rien n'est analysé.
+reponsePortee = 'cancel'
+boitesPortee, dialogues = {}, {}
+dofile(PLUGIN .. '/FusionnerDoublons.lua')
+verifier('annulation : aucun bilan', #dialogues, 0)
+reponsePortee = 'ok'
+
+-- Sans miniatures : la page n'a pas d'image et ne demande aucun aperçu.
+local avant = #apercusDemandes
+miniaturesVoulues = false
+reponses = { 'cancel' }
+dialogues = {}
+dofile(PLUGIN .. '/FusionnerDoublons.lua')
+miniaturesVoulues = nil
+verifier('sans miniatures : aucun aperçu demandé', #apercusDemandes, avant)
+fh = io.open(HTML, 'rb'); html = fh and fh:read('*a') or ''; if fh then fh:close() end
+verifier('sans miniatures : pas d’image', html:find('<img ', 1, true), nil)
+verifier('sans miniatures : la page le dit', html:find('Rapport sans miniatures.', 1, true) ~= nil, true)
+os.remove(RAPPORT)
+
+-- Moins de deux photos : message.
+local seule = nouvellePhoto(300, ecrire('seule/A.jpg', jpeg('<a/>', 'PIXELS-SEULE')), { date = d1 })
+local sauvegarde = catalogue
+nouveauCatalogue({ seule })
+dofile(PLUGIN .. '/FusionnerDoublons.lua')
+verifier('une seule photo : message', dialogues[1] and dialogues[1].texte:find('au moins deux photos', 1, true) ~= nil, true)
 Doublons.rangDossier = rangReel
 
 -- Recréation des albums : un fichier téléchargé dont l'image est déjà au catalogue (XMP

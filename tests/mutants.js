@@ -9,6 +9,31 @@ const [plugin, scratch, texlua] = process.argv.slice(2);
 const mutantsDir = scratch + '/mutant/projet/albums-google-photos.lrplugin';
 
 const mutants = [
+  ['la sélection est ignorée : on prend toujours toute la grille', 'Catalogue.lua',
+    "if #selection >= 2 then return { photos = selection, genre = 'selection', nom = nom } end",
+    "if false then return { photos = selection, genre = 'selection', nom = nom } end"],
+  ['la copie gardée ne rejoint plus les collections des copies retirées', 'Doublons.lua',
+    "        if not dedans[col.id] then\n          dedans[col.id] = true\n          e.collections[#e.collections + 1] = col\n        end\n",
+    "        dedans[col.id] = true\n"],
+  ['les corbeilles comptent comme des collections à reprendre', 'Doublons.lua',
+    'if not col.dynamique and not col.exclue then', 'if not col.dynamique then'],
+  ['la note la plus haute n\'est plus reprise', 'Doublons.lua',
+    "    if (c.note or 0) > note then\n      note = c.note\n      e.note = note\n    end\n", ''],
+  ['le « pourquoi » ne cite plus la plus grande image', 'Doublons.lua',
+    "if a.pixels ~= b.pixels then return 'la plus grande image' end", "if false then return 'la plus grande image' end"],
+  ['les copies retirées ne sortent plus de leurs collections', 'FusionnerDoublons.lua',
+    '  for _, q in ipairs(e.quittees) do q.collection.objet:removePhotos({ q.copie.photo }) end\n', ''],
+  ['les corbeilles ne sont plus reconnues', 'FusionnerDoublons.lua',
+    'dynamique = collection:isSmartCollection(), exclue = CORBEILLES[collection:getName()] or false,',
+    'dynamique = collection:isSmartCollection(), exclue = false,'],
+  ['les aperçus déjà écrits sont refaits à chaque rapport', 'FusionnerDoublons.lua',
+    "if LrFileUtils.exists(c.cheminApercu) ~= 'file' then aFaire[#aFaire + 1] = c end", 'aFaire[#aFaire + 1] = c'],
+  ['« Voir le rapport » n\'ouvre plus la page', 'FusionnerDoublons.lua',
+    "if choix == 'other' then LrHttp.openUrlInBrowser(RapportHtml.urlFichier(RAPPORT_HTML)) end", ''],
+  ['le rapport n\'échappe plus le HTML', 'RapportHtml.lua', "['<'] = '&lt;', ['>'] = '&gt;'", "['<'] = '<', ['>'] = '>'"],
+  ['le rapport n\'est plus trié du plus ancien au plus récent', 'RapportHtml.lua',
+    'if da ~= db then return da < db end', 'if da ~= db then return da > db end'],
+  ['l\'adresse du rapport n\'est plus encodée', 'RapportHtml.lua', "string.format('%%%02X', x:byte())", 'x'],
   ["règle A abandonnée : le protégé tient lieu de gardé", 'Rafales.lua',
     "        if c == meilleur then\n          c.decision = 'garder'", "        if c == meilleur and #libres == #bloc then\n          c.decision = 'garder'"],
   ['les époques protègent à nouveau', 'Rafales.lua', '[Noms.ENSEMBLE_EPOQUES] = true, ', ''],
@@ -36,10 +61,10 @@ const mutants = [
     'if not brut.isVirtualCopy and not ignorees[photo.localIdentifier] then', 'if not brut.isVirtualCopy then'],
   ["_filtered n'est plus un marqueur de retouche", 'Similitude.lua', "'[_%-]filtered',", "'zzz',"],
   ["-Modifié n'est plus un marqueur de retouche", 'Similitude.lua', "'%-modifi', ", "'%-modifier', "],
-  ['les champs de texte ne sont plus recopiés', 'FusionnerDoublons.lua',
-    "if garde.textes[cle] == '' and c.textes[cle] ~= '' then", 'if false then'],
-  ['un champ de texte déjà renseigné est écrasé', 'FusionnerDoublons.lua',
-    "if garde.textes[cle] == '' and c.textes[cle] ~= '' then", "if c.textes[cle] ~= '' then"],
+  ['les champs de texte ne sont plus recopiés', 'Doublons.lua',
+    "if (textes[cle] or '') == '' and valeur ~= '' then", 'if false then'],
+  ['un champ de texte déjà renseigné est écrasé', 'Doublons.lua',
+    "if (textes[cle] or '') == '' and valeur ~= '' then", "if valeur ~= '' then"],
   ['la plus grande image ne passe plus en premier', 'Doublons.lua',
     "  if a.pixels ~= b.pixels then return a.pixels > b.pixels end\n  if a.octetsImage ~= b.octetsImage then return a.octetsImage > b.octetsImage end\n", ''],
   ['un nom « -Modifier » n\'est plus une retouche', 'Similitude.lua',
@@ -53,7 +78,8 @@ const mutants = [
   ['aucune comparaison de forme (rotation)', 'Vignettes.lua', 'if ORIENTATIONS_PIVOTEES[orientation] then largeur, hauteur = hauteur, largeur end', ''],
 ];
 
-const suites = [['test_doublons.lua', 'doublons'], ['test_vignettes.lua', 'vignettes'], ['test_rafales.lua', 'rafales']];
+const suites = [['test_doublons.lua', 'doublons'], ['test_vignettes.lua', 'vignettes'], ['test_rafales.lua', 'rafales'],
+  ['test_rapport.lua', 'rapport']];
 let tousDetectes = true;
 for (const [nom, fichier, avant, apres] of mutants) {
   fs.rmSync(scratch + '/mutant', { recursive: true, force: true });
