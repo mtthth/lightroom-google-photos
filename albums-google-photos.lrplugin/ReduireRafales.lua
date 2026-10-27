@@ -32,6 +32,8 @@ local LrView = import 'LrView'
 local Catalogue = require 'Catalogue'
 local Csv = require 'Csv'
 local Doublons = require 'Doublons'
+local Epoques = require 'Epoques'
+local Historique = require 'Historique'
 local Parallele = require 'Parallele'
 local Rafales = require 'Rafales'
 local Vignettes = require 'Vignettes'
@@ -39,6 +41,7 @@ local Vignettes = require 'Vignettes'
 local TAILLE_LOT = 1000
 local PARALLELE = 4   -- mesures de netteté en même temps
 local RAPPORT = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), 'rafales.csv')
+local HISTORIQUE = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), 'photos-traitees.txt')
 
 -- Source affichée dans Lightroom : un dossier ou une collection. Renvoie
 -- { nom, dossier (vrai pour un dossier), photos = function(sousDossiers) }, ou nil et un message.
@@ -89,8 +92,8 @@ end
 
 -- Fichiers des photos : chemin, heure de prise de vue, taille, et les protections qui se lisent dans
 -- les métadonnées. Renvoie nil si l'utilisateur annule, sinon les fichiers et le nombre de photos de
--- la source ignorées parce qu'elles sont déjà dans une collection « à retirer ».
-local function lireFichiers(catalogue, photos, ignorees, progression)
+-- la source ignorées car elles sont déjà traitées ou dans une collection « à retirer ».
+local function lireFichiers(catalogue, photos, ignorees, historique, progression)
   local fichiers, nbIgnorees = {}, 0
   local complet = Parallele.parLots(photos, TAILLE_LOT, function(lot, _, fin)
     if progression:isCanceled() then return false end
@@ -99,7 +102,7 @@ local function lireFichiers(catalogue, photos, ignorees, progression)
       'countVirtualCopies', 'rating', 'pickStatus', 'colorNameForLabel' })
     for _, photo in ipairs(lot) do
       local b = brutes[photo] or {}
-      if ignorees[photo.localIdentifier] then
+      if ignorees[photo.localIdentifier] or Historique.contient(historique, b.path) then
         nbIgnorees = nbIgnorees + 1
       elseif not b.isVirtualCopy and b.path and b.dateTimeOriginal then
         local raisons = {}
@@ -122,6 +125,23 @@ local function lireFichiers(catalogue, photos, ignorees, progression)
 end
 
 -- Nom de l'ensemble de premier niveau d'une collection et libellé à afficher.
+local function historiqueARetirer(rafales)
+  local photos = {}
+  for _, rafale in ipairs(rafales) do
+    for _, cadre in ipairs(rafale) do
+      if cadre.decision == 'retirer' then
+        for _, f in ipairs(cadre.fichiers) do
+          photos[#photos + 1] = {
+            chemin = f.chemin, fichier = f.nom,
+            date = Epoques.texte(Epoques.depuisLightroom(f.t, 0)),
+          }
+        end
+      end
+    end
+  end
+  return photos
+end
+
 local function infoCollection(collection)
   local noms = { collection:getName() }
   local parent = collection:getParent()
@@ -199,8 +219,9 @@ LrTasks.startAsyncTask(function()
       -- déjà traitées (la collection sera vidée une fois les cadres supprimés, le mot-clé reste).
       local ignorees = Catalogue.photosDesCollections(catalogue, { Doublons.COLLECTION, Rafales.COLLECTION })
       for id in pairs((Catalogue.photosAvecMotCle(catalogue, Rafales.MOT_CLE))) do ignorees[id] = true end
+      local historique = Historique.lire(HISTORIQUE)
       local photos = source.photos(options.sousDossiers)
-      local fichiers, nbIgnorees = lireFichiers(catalogue, photos, ignorees, progression)
+      local fichiers, nbIgnorees = lireFichiers(catalogue, photos, ignorees, historique, progression)
       if not fichiers then return end
 
       etape = 'détection des rafales'
@@ -253,7 +274,7 @@ LrTasks.startAsyncTask(function()
         source.nom, bilan.rafales, bilan.cadres, bilan.proteges, bilan.gardes, options.ratio,
         bilan.retires, bilan.fichiersRetires, taille(bilan.octetsRetires), Rafales.COLLECTION, Rafales.MOT_CLE, RAPPORT)
       if nbIgnorees > 0 then
-        message = message .. string.format('\n\n%d photos de cette source sont ignorées : déjà traitées (mot-clé « %s ») '
+        message = message .. string.format('\n\n%d photos de cette source sont ignorées : déjà traitées (mot-clé « %s » ou historique) '
           .. 'ou dans les collections « à retirer ».', nbIgnorees, Rafales.MOT_CLE)
       end
       if magickAbsent then
@@ -285,14 +306,16 @@ LrTasks.startAsyncTask(function()
         end
       end, { timeout = 120 })
       if not collection then error('Lightroom a refusé de créer la collection « ' .. Rafales.COLLECTION .. ' ».', 0) end
+      Historique.ajouter(HISTORIQUE, 'rafale', historiqueARetirer(rafales))
       LrTasks.pcall(function() catalogue:setActiveSources({ collection }) end)
       LrDialogs.message('Rafales mises de côté', string.format(
         '%d cadres (%d fichiers) sont dans la collection « %s », qui vient d’être ouverte.\n\n'
         .. 'Vérifie-les dans la grille, puis pour les retirer du catalogue : Ctrl+A, Suppr, puis « Retirer » '
         .. '(ou « Supprimer du disque » pour libérer %s).\n\n'
         .. 'Les photos de ces rafales ont reçu le mot-clé « %s » : les prochaines réductions les ignorent, même une '
-        .. 'fois la collection vidée. Pour retraiter une rafale, ôte ce mot-clé de ses photos.',
-        bilan.retires, bilan.fichiersRetires, Rafales.COLLECTION, taille(bilan.octetsRetires), Rafales.MOT_CLE), 'info')
+        .. 'fois la collection vidée. Les fichiers retirés sont mémorisés dans %s. Pour les retraiter, supprime '
+        .. 'leurs lignes de cet historique et ôte le mot-clé de toutes les photos de la rafale.',
+        bilan.retires, bilan.fichiersRetires, Rafales.COLLECTION, taille(bilan.octetsRetires), Rafales.MOT_CLE, HISTORIQUE), 'info')
     end)
     if not ok then
       LrDialogs.message('Erreur pendant la réduction des rafales',

@@ -17,6 +17,9 @@ doublons.csv
 # Rapport HTML des doublons et ses miniatures (photos personnelles).
 rapport-doublons/
 
+# Historique des photos écartées par fusion des doublons ou réduction des rafales.
+photos-traitees.txt
+
 # Journal d'erreurs de Lightroom.
 log.txt
 

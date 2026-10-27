@@ -47,7 +47,9 @@ local LrView = import 'LrView'
 local Catalogue = require 'Catalogue'
 local Csv = require 'Csv'
 local Doublons = require 'Doublons'
+local Epoques = require 'Epoques'
 local Empreintes = require 'Empreintes'
+local Historique = require 'Historique'
 local Parallele = require 'Parallele'
 local Rafales = require 'Rafales'
 local RapportHtml = require 'RapportHtml'
@@ -63,6 +65,7 @@ local COLLECTION_DOUBLONS = Doublons.COLLECTION
 local CORBEILLES = { [Doublons.COLLECTION] = true, [Rafales.COLLECTION] = true }
 local DOSSIER_PROJET = LrPathUtils.parent(_PLUGIN.path)
 local RAPPORT = LrPathUtils.child(DOSSIER_PROJET, 'doublons.csv')
+local HISTORIQUE = LrPathUtils.child(DOSSIER_PROJET, 'photos-traitees.txt')
 local DOSSIER_RAPPORT = LrPathUtils.child(DOSSIER_PROJET, 'rapport-doublons')
 local RAPPORT_HTML = LrPathUtils.child(DOSSIER_RAPPORT, 'index.html')
 local DOSSIER_APERCUS = LrPathUtils.child(DOSSIER_RAPPORT, 'vignettes')
@@ -117,7 +120,7 @@ end
 
 -- Les photos de la portée (hors copies virtuelles), avec taille, date et chemin.
 -- Renvoie nil si l'utilisateur annule.
-local function lireCopies(catalogue, photos, progression)
+local function lireCopies(catalogue, photos, progression, historique)
   local copies = {}
   local complet = parLots(photos, TAILLE_LOT, function(lot, _, fin)
     if progression:isCanceled() then return false end
@@ -126,7 +129,7 @@ local function lireCopies(catalogue, photos, progression)
       { 'path', 'fileSize', 'dateTimeOriginal', 'isVirtualCopy', 'countVirtualCopies' })
     for _, photo in ipairs(lot) do
       local b = brutes[photo] or {}
-      if not b.isVirtualCopy and b.path and b.fileSize then
+      if not b.isVirtualCopy and b.path and b.fileSize and not Historique.contient(historique, b.path) then
         copies[#copies + 1] = {
           photo = photo, id = photo.localIdentifier, chemin = b.path, taille = b.fileSize,
           date = b.dateTimeOriginal, virtuelles = b.countVirtualCopies or 0,
@@ -355,6 +358,17 @@ local function fusionner(catalogue, decisions, progression)
     catalogue:withWriteAccessDo('Fusionner des doublons', function()
       for _, d in ipairs(lot) do fusionnerGroupe(d, corbeille) end
     end, { timeout = 120 })
+    local photos = {}
+    for _, decision in ipairs(lot) do
+      for _, c in ipairs(decision.retirees) do
+        photos[#photos + 1] = {
+          chemin = c.chemin,
+          fichier = nomFichier(c.chemin),
+          date = c.date and Epoques.texte(Epoques.depuisLightroom(c.date, 0)) or '',
+        }
+      end
+    end
+    Historique.ajouter(HISTORIQUE, 'doublon', photos)
     nbFusionnes = fin
     progression:setPortionComplete(fin, #decisions)
   end)
@@ -459,7 +473,8 @@ LrTasks.startAsyncTask(function()
       local progression = LrProgressScope { title = 'Recherche des doublons', functionContext = contexte }
 
       etape = 'lecture des photos'
-      local copies = lireCopies(catalogue, portee.photos, progression)
+      local historique = Historique.lire(HISTORIQUE)
+      local copies = lireCopies(catalogue, portee.photos, progression, historique)
       if not copies then return end
       etape = 'comparaison des fichiers'
       local trouves = chercherGroupes(copies, progression)
@@ -526,10 +541,11 @@ LrTasks.startAsyncTask(function()
         .. 'retouchée, puis la mieux rangée), ce qui est retiré, et ce qui change dans les collections et les '
         .. 'métadonnées. Clique sur « Voir le rapport » (il s’ouvre dans ton navigateur) : rien n’est modifié '
         .. 'tant que tu ne cliques pas sur « Fusionner ». Les copies en trop sont rassemblées dans la collection '
-        .. '« %s », à retirer ensuite du catalogue.',
+        .. '« %s », à retirer ensuite du catalogue. Leurs chemins et dates sont mémorisés dans %s pour que '
+        .. '« Recréer les albums » continue de les ignorer après vidage de la collection.',
         decrirePortee(portee):gsub('^les', 'Parmi les'), #aFusionner, nbRetirees,
         nbReduites > 0 and string.format(' (dont %d copies réduites ou recompressées)', nbReduites) or '',
-        COLLECTION_DOUBLONS)
+        COLLECTION_DOUBLONS, HISTORIQUE)
       if nbAVerifier > 0 then
         message = message .. string.format('\n\n%d groupes à vérifier (plusieurs copies retouchées, copie '
           .. 'réduite retouchée…) restent tels quels.', nbAVerifier)

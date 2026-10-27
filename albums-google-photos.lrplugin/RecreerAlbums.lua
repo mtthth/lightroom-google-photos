@@ -26,6 +26,7 @@ local Catalogue = require 'Catalogue'
 local Doublons = require 'Doublons'
 local Empreintes = require 'Empreintes'
 local Epoques = require 'Epoques'
+local Historique = require 'Historique'
 local Noms = require 'Noms'
 local Rafales = require 'Rafales'
 
@@ -38,6 +39,7 @@ local ENSEMBLE_EPOQUES = Noms.ENSEMBLE_EPOQUES
 local DUREE_MAX_EPOQUE_JOURS = 45
 -- Titre sous lequel export-albums.mjs range les photos qui ne sont dans aucun album.
 local TITRE_HORS_ALBUM = '(hors album)'
+local HISTORIQUE = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), 'photos-traitees.txt')
 
 -- Lit un CSV séparé par « ; », avec guillemets éventuels et BOM UTF-8.
 local function lireCsv(chemin)
@@ -231,7 +233,15 @@ local function indexerCatalogue(catalogue, progression, problemes)
   progression:setCaption('Lecture du catalogue : liste des photos…')
   local photos = catalogue:getAllPhotos()
   local ignorees, nbIgnorees = copiesEnTrop(catalogue)
+  local historique = Historique.lire(HISTORIQUE)
   local index = Correspondance.nouvelIndex()
+  index.traitees = Correspondance.nouvelIndex()
+  index.nbHistoriqueIgnorees = 0
+  for _, entree in ipairs(historique.entrees) do
+    if entree.fichier and entree.fichier ~= '' then
+      Correspondance.ajouterPhoto(index.traitees, entree.chemin, entree.fichier, entree.date)
+    end
+  end
   index.nbIgnorees = nbIgnorees
   index.temps = {}    -- photo → date de prise de vue (secondes Lightroom)
   index.datees = {}   -- { t = secondes Lightroom, photo }, pour les époques
@@ -253,7 +263,12 @@ local function indexerCatalogue(catalogue, progression, problemes)
       -- Une photo au comportement inattendu est ignorée et signalée, sans tout arrêter.
       local ok, erreur = LrTasks.pcall(function()
         local brut = brutes[photo] or {}
-        if not brut.isVirtualCopy and not ignorees[photo.localIdentifier] then
+        local dejaIgnoree = ignorees[photo.localIdentifier]
+        if not dejaIgnoree and Historique.contient(historique, brut.path) then
+          dejaIgnoree = true
+          index.nbHistoriqueIgnorees = index.nbHistoriqueIgnorees + 1
+        end
+        if not brut.isVirtualCopy and not dejaIgnoree then
           if brut.path then
             local copie = { photo = photo, chemin = brut.path }
             local nom = LrPathUtils.leafName(brut.path):lower()
@@ -339,7 +354,7 @@ LrTasks.startAsyncTask(function()
     local nonTrouvees = { { 'album', 'fichier', 'date_prise_de_vue' } }
     local manquantes = {}
     local paires = {}   -- { temps Lightroom, temps Google } de photos reconnues, pour le décalage horaire
-    local nbTrouvees = 0
+    local nbTrouvees, nbHistorique = 0, 0
     for i = 2, #lignes do
       local ligne = lignes[i]
       local titreCsv = trim(ligne[1] or '')
@@ -380,7 +395,11 @@ LrTasks.startAsyncTask(function()
           end
         else
           -- titreCsv : le titre tel qu'il est dans le CSV, pour le manifeste et le rapport.
-          table.insert(manquantes, { titre = titre, titreCsv = titreCsv, fichier = ligne[2] or '', date = ligne[3] or '' })
+          local okHistorique, photoTraitee = LrTasks.pcall(Correspondance.retrouver, index.traitees, ligne[2], ligne[3])
+          table.insert(manquantes, {
+            titre = titre, titreCsv = titreCsv, fichier = ligne[2] or '', date = ligne[3] or '',
+            historique = okHistorique and photoTraitee ~= nil,
+          })
         end
       end
       progression:setPortionComplete(i, #lignes)
@@ -404,7 +423,7 @@ LrTasks.startAsyncTask(function()
         nbTrouvees = nbTrouvees + 1
         nbParHeure = nbParHeure + 1
       else
-        table.insert(encore, m)
+        if m.historique then nbHistorique = nbHistorique + 1 else table.insert(encore, m) end
       end
     end
     manquantes = encore
@@ -547,7 +566,10 @@ LrTasks.startAsyncTask(function()
     local nbNonTrouvees = #nonTrouvees - 1
     local message = string.format(
       '%d collections créées ou complétées dans « %s ».\n%d photos retrouvées sur %d (catalogue : %d photos).',
-      #ordre, ENSEMBLE_ALBUMS, nbTrouvees, nbTrouvees + nbNonTrouvees, nbCatalogue)
+      #ordre, ENSEMBLE_ALBUMS, nbTrouvees, nbTrouvees + nbNonTrouvees + nbHistorique, nbCatalogue)
+    if nbHistorique > 0 then
+      message = message .. string.format('\n%d lignes ignorées selon l’historique des traitements.', nbHistorique)
+    end
     local nbHorsAlbum = 0
     for _, titre in ipairs(ordre) do
       if albums[titre].horsAlbum then nbHorsAlbum = nbHorsAlbum + #albums[titre].photos end
@@ -575,6 +597,9 @@ LrTasks.startAsyncTask(function()
     if (index.nbIgnorees or 0) > 0 then
       message = message .. string.format('\n%d photos en trop des collections « %s » et « %s » ignorées (à retirer du catalogue).',
         index.nbIgnorees, Doublons.COLLECTION, Rafales.COLLECTION)
+    end
+    if (index.nbHistoriqueIgnorees or 0) > 0 then
+      message = message .. string.format('\n%d photos ignorées d’après l’historique persistant.', index.nbHistoriqueIgnorees)
     end
     local cheminRapport = LrPathUtils.removeExtension(cheminCsv) .. '-non-trouvees.csv'
     if nbNonTrouvees > 0 then

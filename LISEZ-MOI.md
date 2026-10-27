@@ -99,7 +99,9 @@ La copie gardée est la plus grande image, puis celle qui est retouchée dans Li
 la place des autres dans leurs collections et récupère mots-clés, note, drapeau, position GPS, et les champs de texte
 (titre, légende, auteur, lieu, ville, pays…) qu'elle n'a pas. Les autres copies vont dans la collection
 « Doublons à retirer » (jamais supprimées par le module : Ctrl+A, Suppr dans cette collection).
-« Recréer les albums » ignore cette collection tant qu'elle contient des copies.
+Les chemins, noms et dates des copies retirées sont aussi conservés dans `photos-traitees.txt`, à la racine du projet.
+Ce fichier est exclu de git. « Recréer les albums » ignore ces photos même après vidage de la collection. Pour les
+prendre de nouveau en compte, retire leur ligne de l'historique.
 
 **Rapport HTML avant toute modification.** Après l'analyse, le module écrit `rapport-doublons\index.html` et propose
 de le voir (bouton « Voir le rapport », il s'ouvre dans le navigateur) avant que tu confirmes. Pour chaque groupe : les
@@ -127,6 +129,10 @@ Affiche un dossier ou une collection, puis lance la commande (réglages : 1 cadr
   détail dans `rafales.csv`. Rien n'est supprimé par le module.
 - Toutes les photos des rafales traitées reçoivent le mot-clé « Rafale traitée » (non exporté) : une relance les
   ignore, même une fois la collection vidée. Pour retraiter une rafale, ôte ce mot-clé de ses photos.
+- Les fichiers des cadres retirés sont aussi inscrits dans `photos-traitees.txt`, à la racine du projet. Le module
+  les ignore lors des prochaines réductions et « Recréer les albums » ne les réintroduit pas après vidage de la
+  collection. Pour les reprendre en compte, retire leurs lignes du fichier ; pour retraiter la rafale, ôte aussi le
+  mot-clé « Rafale traitée » de toutes ses photos.
 
 Pour juger un dossier sans toucher à Lightroom, `node rafales-a-blanc.mjs 2026-08-15` produit un rapport HTML avec
 les miniatures (options : `--sous-dossiers`, `--bloc N`, `--ignorer "collection"` ; Node 22.13 ou plus). Il lit le
