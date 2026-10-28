@@ -1,5 +1,6 @@
 -- Tests de Rafales.lua (logique pure), puis simulation de ReduireRafales.lua avec un faux Lightroom.
 local PLUGIN, SCRATCH = arg[1], arg[2]
+local UndoSimule = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/annulation_simulee.lua')
 package.path = PLUGIN .. '/?.lua;' .. package.path
 os.getenv = nil
 
@@ -189,11 +190,13 @@ verifier('rapport : numéro de bloc', lignes[6][2], 2)
 -- ----------------------------------------------------------------------------------------------------------------------------
 -- Simulation de la commande avec un faux Lightroom
 -- ----------------------------------------------------------------------------------------------------------------------------
-_PLUGIN = { path = PLUGIN }
-local RAPPORT = PLUGIN:match('^(.*)[/\\]') .. '/rafales.csv'
+-- Chaque scénario a son propre projet sous SCRATCH, y compris ses rapports et son historique.
+local RAPPORT, numeroCas
+numeroCas = 0
 
 local collections, ecritures, dialogues, reponses, journal, sousDossiersDemande, motsCles
 local photosDuDossier, optionsTest, sources, magickDispo, nettetes
+local catalogueCourant
 local ecriture = false
 
 local function nouvelEnsemble(nom, parent)
@@ -241,6 +244,7 @@ local function nouvellePhoto(id, chemin, dt, champs)
 end
 
 mocks.LrApplication = { activeCatalog = function()
+  if catalogueCourant then return catalogueCourant end
   local catalogue = {}
   function catalogue:getActiveSources() return sources end
   function catalogue:batchGetRawMetadata(lot)
@@ -265,8 +269,9 @@ mocks.LrApplication = { activeCatalog = function()
   function catalogue:withWriteAccessDo(_, f)
     ecritures = ecritures + 1
     ecriture = true
-    f()
+    local ok, erreur = pcall(f)
     ecriture = false
+    if not ok then error(erreur, 0) end
   end
   function catalogue:createCollection(nom)
     assert(ecriture, 'createCollection hors accès en écriture')
@@ -284,6 +289,8 @@ mocks.LrApplication = { activeCatalog = function()
     return k
   end
   function catalogue:setActiveSources(s) journal[#journal + 1] = 'source ' .. s[1].nom end
+  UndoSimule.brancher(catalogue, function() return { photosDuDossier, collections, motsCles } end)
+  catalogueCourant = catalogue
   return catalogue
 end }
 mocks.LrDialogs = {
@@ -307,6 +314,28 @@ mocks.LrProgressScope = function() return setmetatable({}, { __index = function(
 end }) end
 mocks.LrShell = { revealInShell = function(p) journal[#journal + 1] = 'révéler ' .. p end }
 mocks.LrTasks = { pcall = pcall, yield = function() end, sleep = function() end, startAsyncTask = function(f) f() end }
+mocks.LrFileUtils = {
+  chooseUniqueFileName = function(p)
+    local candidat, i = p, 1
+    while true do
+      local f = io.open(candidat, 'rb'); if not f then return candidat end
+      f:close(); i = i + 1; candidat = p .. '-' .. i
+    end
+  end,
+  move = function(src, dest)
+    local f = io.open(dest, 'rb'); if f then f:close(); return false end
+    return os.rename(src, dest)
+  end,
+  exists = function(p) local f = io.open(p, 'rb'); if not f then return false end; f:close(); return 'file' end,
+  fileAttributes = function(p)
+    local f = io.open(p, 'rb'); if not f then return nil end
+    local taille = f:seek('end'); f:close(); return { fileSize = taille }
+  end,
+  readFile = function(p)
+    local f = assert(io.open(p, 'rb'), 'Could not open file for reading: ' .. p)
+    local contenu = f:read('*a'); f:close(); return contenu
+  end,
+}
 
 -- Faux ImageMagick : la netteté vient d'une table.
 package.loaded['Vignettes'] = {
@@ -316,6 +345,12 @@ package.loaded['Vignettes'] = {
 
 local function chemin(nom) return D .. nom end
 local function monter()
+  catalogueCourant = nil
+  numeroCas = numeroCas + 1
+  local projetTemporaire = SCRATCH .. '/projet-rafales-' .. numeroCas
+  os.execute('mkdir "' .. projetTemporaire:gsub('/', '\\') .. '" 2>nul')
+  _PLUGIN = { path = projetTemporaire .. '/albums-google-photos.lrplugin' }
+  RAPPORT = projetTemporaire .. '/rafales.csv'
   collections, ecritures, dialogues, journal, motsCles = {}, 0, {}, {}, {}
   magickDispo, sousDossiersDemande = true, nil
   nouveauMotCle('Enfants', nouveauMotCle('Famille', nil))   -- mots-clés sans rapport
@@ -376,7 +411,6 @@ local function monter()
     getPhotos = function(_, sous) sousDossiersDemande = sous; return photosDuDossier end }
   sources = { dossier }
   optionsTest = { ratio = 4 }
-  os.remove(RAPPORT)
   return p
 end
 local function lancer(reps)
@@ -418,7 +452,7 @@ verifier('collection créée', noms(collectionRafales()),
   'DSCF1000.JPG DSCF1000.RAF DSCF1003.JPG DSCF1007.JPG DSCF2500.JPG DSCF2502.JPG DSCF2503.JPG')
 verifier('une seule écriture', ecritures, 1)
 verifier('la copie en trop des doublons n’est pas touchée', collectionRafales() and #collectionRafales().photos, 7)
-verifier('collection ouverte', journal[1], 'source Rafales à retirer')
+verifier('rafales : vue courante conservée', journal[1], nil)
 local traite = nil
 for _, k in ipairs(motsCles) do if k.nom == 'Rafale traitée' then traite = k end end
 verifier('mot-clé créé', traite ~= nil, true)
@@ -444,6 +478,26 @@ verifier('rapport : collection dynamique ne protège pas', csv:find('dynamique',
 verifier('rapport : netteté à virgule', csv:find('70,00', 1, true) ~= nil, true)
 verifier('rapport : moins net que', csv:find('moins net que DSCF1002', 1, true) ~= nil, true)
 verifier('le plus net d’un bloc est gardé', csv:find('DSCF1002;[0-9:]+;garder') ~= nil, true)
+
+local Historique = require 'Historique'
+local Annulation = require 'Annulation'
+local historiqueRafales = RAPPORT:gsub('rafales%.csv$', 'photos-traitees.txt')
+local catalogueUndo = mocks.LrApplication.activeCatalog()
+verifier('rafales : une seule étape Ctrl+Z', catalogueUndo:nombreActions(), 1)
+verifier('rafales : nom de l’action Ctrl+Z', catalogueUndo:derniereAction(), 'Réduire les rafales')
+catalogueUndo:annuler()
+-- Relancer une analyse synchronise immédiatement l'historique, sans attendre le suivi périodique.
+lancer({ 'cancel' })
+verifier('rafales Ctrl+Z : collection à retirer supprimée', collectionRafales(), nil)
+verifier('rafales Ctrl+Z : mot-clé de traitement supprimé', #motsCles, 1)
+verifier('rafales Ctrl+Z : historique restauré', #Historique.lire(historiqueRafales).entrees, 0)
+verifier('rafales Ctrl+Z : nouvelle analyse possible', (dialogues[1] and dialogues[1].texte or ''):match('(%d+) rafales'), '3')
+catalogueUndo:retablir()
+Annulation.synchroniser(catalogueUndo, historiqueRafales)
+verifier('rafales Rétablir : copies remises à retirer', #collectionRafales().photos, 7)
+verifier('rafales Rétablir : historique rétabli', #Historique.lire(historiqueRafales).entrees, 7)
+verifier('rafales Rétablir : mot-clé de traitement rétabli', #motsCles, 2)
+verifier('rafales : synchro sans étape Undo supplémentaire', catalogueUndo:nombreActions(), 1)
 
 -- 2. Relance : toutes les photos des rafales traitées portent le mot-clé, elles sont ignorées.
 lancer({})
@@ -557,6 +611,30 @@ for _, ph in ipairs(photosDuDossier) do ph.note = 1 end
 lancer({})
 verifier('tout protégé : message', dialogues[1] and dialogues[1].texte:find('rien à retirer', 1, true) ~= nil, true)
 verifier('tout protégé : aucune écriture', ecritures, 0)
+
+-- 14. Un refus de Lightroom invalide toute l'opération, avant de mémoriser des exclusions.
+for _, refus in ipairs({ 'collection', 'mot-clé' }) do
+  p = monter()
+  local catalogueRefus = mocks.LrApplication.activeCatalog()
+  local nbCollectionsAvant = #collections
+  if refus == 'collection' then
+    catalogueRefus.createCollection = function() return nil end
+  else
+    catalogueRefus.createKeyword = function() return nil end
+  end
+  lancer({ 'ok' })
+  local prefixe = 'refus ' .. refus .. ' : '
+  verifier(prefixe .. 'erreur signalée', dialogues[#dialogues] and dialogues[#dialogues].titre,
+    'Erreur pendant la réduction des rafales')
+  verifier(prefixe .. 'raison du refus', (dialogues[#dialogues] and dialogues[#dialogues].texte or ''):find(
+    'refusé de créer ' .. (refus == 'collection' and 'la collection' or 'le mot-clé'), 1, true) ~= nil, true)
+  verifier(prefixe .. 'pas de collection de retrait', collectionRafales(), nil)
+  verifier(prefixe .. 'collections antérieures conservées', #collections, nbCollectionsAvant)
+  verifier(prefixe .. 'appartenances restaurées', #p['DSCF1000.JPG'].collectionsContenues, 1)
+  verifier(prefixe .. 'aucun mot-clé de traitement', #motsCles, 1)
+  verifier(prefixe .. 'aucune exclusion enregistrée', #Historique.lire(RAPPORT:gsub('rafales%.csv$', 'photos-traitees.txt')).entrees, 0)
+  verifier(prefixe .. 'aucune action validée', catalogueRefus:nombreActions(), 0)
+end
 os.remove(RAPPORT)
 
 print(string.format('%d vérifications, %d échecs', nb, echecs))

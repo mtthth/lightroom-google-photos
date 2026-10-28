@@ -13,7 +13,7 @@ const mutants = [
     "if #selection >= 2 then return { photos = selection, genre = 'selection', nom = nom } end",
     "if false then return { photos = selection, genre = 'selection', nom = nom } end"],
   ['la copie gardée ne rejoint plus les collections des copies retirées', 'Doublons.lua',
-    "        if not dedans[col.id] then\n          dedans[col.id] = true\n          e.collections[#e.collections + 1] = col\n        end\n",
+    "        if not dedans[col.id] then\n          dedans[col.id] = true\n          e.collections[#e.collections + 1] = col\n          e.collectionsFinales[#e.collectionsFinales + 1] = col\n        end\n",
     "        dedans[col.id] = true\n"],
   ['les corbeilles comptent comme des collections à reprendre', 'Doublons.lua',
     'if not col.dynamique and not col.exclue then', 'if not col.dynamique then'],

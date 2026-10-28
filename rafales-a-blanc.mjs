@@ -27,6 +27,7 @@
 //   - qui ont une version retouchée dans un éditeur externe (-Modifier, DxO_…).
 // Les photos des collections « Doublons à retirer » et « Rafales à retirer », et celles qui portent le
 // mot-clé « Rafale traitée » (posé par la commande Lightroom « Réduire les rafales »), sont ignorées.
+// Les chemins présents dans photos-traitees.txt, à côté du script, sont également ignorés.
 // C'est le même calcul que la commande « Réduire les rafales… » du module Lightroom.
 // La netteté est l'écart-type du laplacien de l'image réduite (ImageMagick) : plus il est grand,
 // plus l'image est nette.
@@ -36,6 +37,8 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { cadresAdjacents, cheminsExclus, cleCadre, nomRetouche, normaliserChemin, numeroCadre,
+  raisonsProtection, tailleBlocDemandee } from './rafales-regles.mjs';
 
 const executer = promisify(execFile);
 
@@ -46,14 +49,13 @@ const PARALLELE = 6;
 const LARGEUR_MESURE = 1200;
 const COTE_MINIATURE = 200;
 const COLLECTIONS_SANS_PROTECTION = new Set(['Google Photos - époques', 'Doublons à retirer', 'Rafales à retirer']);
-const MARQUEUR_RETOUCHE = /-modifi|-edit|-retouch|[_-]filtered|[ _-]dxo_/i;
 const RANG_FORMAT = { jpg: 0, jpeg: 0, tif: 1, tiff: 1, png: 2, heic: 3 };
 
 // --- Entrée ----------------------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
 const sousDossiers = args.includes('--sous-dossiers');
-const tailleBloc = Number(args[args.indexOf('--bloc') + 1] || 4) || 4;
+const tailleBloc = tailleBlocDemandee(args);
 // Valeurs des options : elles ne sont pas le nom du dossier.
 const valeursOptions = new Set(args.flatMap((a, i) => (a === '--bloc' || a === '--ignorer' ? [args[i + 1]] : [])));
 const dossierDemande = args.find((a) => !a.startsWith('--') && !valeursOptions.has(a));
@@ -116,9 +118,12 @@ const ignorees = new Set([
   ...db.prepare(`SELECT ki.image AS id FROM AgLibraryKeywordImage ki JOIN AgLibraryKeyword k ON k.id_local = ki.tag
     WHERE k.name = 'Rafale traitée'`).all().map((r) => r.id),
 ]);
-const nbIgnorees = fichiers.filter((f) => ignorees.has(f.id)).length;
-for (let i = fichiers.length - 1; i >= 0; i--) if (ignorees.has(fichiers[i].id)) fichiers.splice(i, 1);
-if (nbIgnorees > 0) console.log(`${nbIgnorees} photos ignorées (déjà traitées ou dans « Doublons à retirer » / « Rafales à retirer »).`);
+const cheminHistorique = new URL('./photos-traitees.txt', import.meta.url);
+const historique = cheminsExclus(existsSync(cheminHistorique) ? readFileSync(cheminHistorique, 'utf8') : '');
+const estIgnoree = (f) => ignorees.has(f.id) || historique.has(normaliserChemin(f.dossier + f.nom + '.' + f.ext));
+const nbIgnorees = fichiers.filter(estIgnoree).length;
+for (let i = fichiers.length - 1; i >= 0; i--) if (estIgnoree(fichiers[i])) fichiers.splice(i, 1);
+if (nbIgnorees > 0) console.log(`${nbIgnorees} photos ignorées (déjà traitées, historique ou collections « à retirer »).`);
 
 const appartenances = new Map();   // photo → liste de { racine, nom }
 for (const l of db.prepare(`WITH RECURSIVE racine(id, nom, rac) AS (
@@ -135,29 +140,18 @@ for (const l of db.prepare(`WITH RECURSIVE racine(id, nom, rac) AS (
 const cadres = new Map();
 for (const f of fichiers) {
   f.t = Date.parse(f.date.slice(0, 19) + 'Z') / 1000;
-  f.numero = Number(f.nom.match(/(\d{3,})/)?.[1] ?? -1);
+  const nomComplet = f.nom + '.' + f.ext;
+  f.numero = numeroCadre(nomComplet);
   f.chemin = f.dossier + f.nom + '.' + f.ext;
-  f.derive = MARQUEUR_RETOUCHE.test(f.nom);
-  const cle = `${f.dossier}|${f.t}|${f.numero}`;
+  f.derive = nomRetouche(nomComplet);
+  const cle = cleCadre(f.dossier, f.t, nomComplet);
   if (!cadres.has(cle)) cadres.set(cle, { t: f.t, numero: f.numero, fichiers: [] });
   cadres.get(cle).fichiers.push(f);
 }
 const liste = [...cadres.values()].sort((a, b) => a.t - b.t || a.numero - b.numero);
 
 for (const c of liste) {
-  const raisons = [];
-  for (const f of c.fichiers) {
-    if (f.note > 0) raisons.push(`note ${f.note}`);
-    if (f.drapeau !== 0) raisons.push('drapeau');
-    if (f.libelle !== '') raisons.push('libellé');
-    if (f.retouche > 0) raisons.push('retouches Lightroom');
-    if (f.virtuelles > 0) raisons.push('copies virtuelles');
-    for (const a of appartenances.get(f.id) ?? []) {
-      if (!COLLECTIONS_SANS_PROTECTION.has(a.racine)) raisons.push(`collection « ${a.racine === a.nom ? a.nom : `${a.racine} / ${a.nom}`} »`);
-    }
-  }
-  if (c.fichiers.some((f) => f.derive) && c.fichiers.some((f) => !f.derive)) raisons.push('version retouchée (éditeur externe)');
-  c.raisons = [...new Set(raisons)];
+  c.raisons = raisonsProtection(c.fichiers, appartenances, COLLECTIONS_SANS_PROTECTION);
   c.protege = c.raisons.length > 0;
   // Fichier mesuré : un fichier ordinaire que ImageMagick sait lire, de préférence un JPEG.
   const candidats = c.fichiers.filter((f) => !f.derive && RANG_FORMAT[f.ext.toLowerCase()] !== undefined)
@@ -166,7 +160,7 @@ for (const c of liste) {
   c.nom = (c.fichiers.find((f) => !f.derive && !/-\d$/.test(f.nom)) ?? c.fichiers[0]).nom;
 }
 
-const adjacents = (a, b) => b.t - a.t <= ECART_MAX_SECONDES && (a.numero >= 100000 || b.numero >= 100000 || Math.abs(b.numero - a.numero) <= ECART_MAX_NUMERO);
+const adjacents = (a, b) => cadresAdjacents(a, b, ECART_MAX_SECONDES, ECART_MAX_NUMERO);
 const rafales = [];
 let courante = [];
 for (const c of liste) {

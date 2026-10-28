@@ -8,6 +8,7 @@ photos-*.csv
 # Photos téléchargées depuis Google Photos, ou à importer.
 photos-*-manquantes/
 photos-*-originaux-non-importes/
+photos-*-videos-converties/
 
 # Rapports générés (le HTML embarque des miniatures de photos personnelles).
 rafales-*.html
@@ -19,6 +20,8 @@ rapport-doublons/
 
 # Historique des photos écartées par fusion des doublons ou réduction des rafales.
 photos-traitees.txt
+photos-traitees*.bak*
+photos-traitees*.tmp*
 
 # Journal d'erreurs de Lightroom.
 log.txt

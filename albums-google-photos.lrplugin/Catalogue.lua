@@ -81,14 +81,15 @@ end
 
 -- Étiquette d'une collection pour l'affichage : « Ensemble / Collection » (ensemble de premier niveau
 -- et collection elle-même ; les niveaux intermédiaires sont omis).
-function M.etiquetteCollection(collection)
+-- `complet` conserve aussi les années et les autres ensembles intermédiaires.
+function M.etiquetteCollection(collection, complet)
   local noms = { collection:getName() }
   local parent = collection:getParent()
   while parent do
     table.insert(noms, 1, parent:getName())
     parent = parent:getParent()
   end
-  return #noms == 1 and noms[1] or (noms[1] .. ' / ' .. noms[#noms])
+  return complet and table.concat(noms, ' / ') or (#noms == 1 and noms[1] or (noms[1] .. ' / ' .. noms[#noms]))
 end
 
 return M

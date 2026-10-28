@@ -76,6 +76,13 @@ extension que le fichier Google qui est mis dans la collection d'album (les deux
 
 Dans Lightroom : Bibliothèque → Options du module externe → …
 
+**Annuler / Rétablir.** Chaque fusion automatique, fusion forcée et réduction de rafales constitue une seule
+action Lightroom : **Ctrl+Z** restaure les collections, métadonnées et mots-clés antérieurs. **Rétablir** réapplique
+l'opération. L'état des exclusions est inclus dans cette action et conservé dans le catalogue ;
+`photos-traitees.txt` en est le miroir, synchronisé après Annuler / Rétablir et avant toute nouvelle analyse.
+Les éditions volontaires du fichier texte sont conservées comme base des opérations suivantes. Cette prise en
+charge concerne les opérations réalisées à partir de la version 1.5.0, après rechargement du module.
+
 ### Fusionner les doublons…
 
 Une même photo importée plusieurs fois (dossier « Désordre », copies `-2`, `-3`, `(2)`, versions `-Modifier`…).
@@ -98,7 +105,11 @@ date, puis compare les images par une miniature ImageMagick de 16 × 16 pixels :
 La copie gardée est la plus grande image, puis celle qui est retouchée dans Lightroom, puis la mieux rangée. Elle prend
 la place des autres dans leurs collections et récupère mots-clés, note, drapeau, position GPS, et les champs de texte
 (titre, légende, auteur, lieu, ville, pays…) qu'elle n'a pas. Les autres copies vont dans la collection
-« Doublons à retirer » (jamais supprimées par le module : Ctrl+A, Suppr dans cette collection).
+« Doublons à retirer » (jamais supprimées par le module). Elles restent visibles dans les dossiers tant qu'elles
+sont dans le catalogue. Pour terminer le retrait : sélectionner uniquement les copies écartées dans
+**Catalogue → Toutes les photos**, puis **Suppr → Retirer**. Suppr depuis une collection peut simplement les sortir
+de cette collection.
+La fusion conserve la vue courante : elle n'ouvre pas automatiquement « Doublons à retirer ».
 Les chemins, noms et dates des copies retirées sont aussi conservés dans `photos-traitees.txt`, à la racine du projet.
 Ce fichier est exclu de git. « Recréer les albums » ignore ces photos même après vidage de la collection. Pour les
 prendre de nouveau en compte, retire leur ligne de l'historique.
@@ -114,15 +125,31 @@ que celui qui est appliqué ensuite : il ne peut pas annoncer autre chose. Les m
 220 pixels écrits dans `rapport-doublons\vignettes\` (réutilisés d'un rapport à l'autre ; case à décocher dans la
 boîte de départ pour s'en passer). Le détail est aussi dans `doublons.csv`.
 
-### Fusion manuelle des photos sélectionnées…
+### Fusionner de force la sélection…
 
 Pour fusionner un groupe que la détection automatique ne reconnaît pas : sélectionne ses photos, puis lance la
 commande dans **Bibliothèque → Options du module externe**. Le SDK Lightroom ne permet pas d'ajouter une commande
 au menu du clic droit. La commande considère toute la sélection comme une seule photo, sans comparer les fichiers.
-Elle demande quelle photo garder, indique les collections qui seront réunies et demande confirmation avant toute
-modification. Les retouches Lightroom, copies virtuelles et photos publiées sont protégées : une photo qui porte
-ces éléments ne peut pas être retirée du groupe. Les copies fusionnées rejoignent « Doublons à retirer » et sont
-mémorisées dans `photos-traitees.txt`.
+Elle propose la plus grande résolution (lue dans le catalogue Lightroom), puis la meilleure note, puis le nom le
+plus simple. Les dimensions, la note et le poids sont visibles pour chaque choix. Si les dimensions sont incomplètes,
+la note et le nom priment ; le poids du fichier départage les égalités. La proposition peut être changée.
+Le récapitulatif liste explicitement tous les albums après fusion, y compris ceux où la photo gardée se trouve déjà,
+avec leur chemin complet (année comprise), puis les autres collections ordinaires. Les métadonnées sont réunies :
+note maximale, union des mots-clés, drapeau retenu prioritaire sur rejeté, textes et GPS déjà renseignés conservés,
+champs vides complétés. L'accès à l'historique est vérifié avant toute modification du catalogue.
+Cette commande force aussi la fusion de versions `_filtered`, `-Modifier` ou ayant des retouches Lightroom :
+la confirmation « Fusionner de force » liste les réglages, copies virtuelles ou appartenances publiées qui ne
+seront pas transférés. Ils restent sur les copies écartées tant qu'elles sont au catalogue ; leur retrait ultérieur
+fera perdre ces éléments. Une copie virtuelle dont l'original est également sélectionné ne peut pas être la
+gardée, puisque retirer son original la retirerait aussi. Une virtuelle dont l'original est déjà dans une collection
+« à retirer » ne peut pas non plus être gardée : rétablis d'abord son original. Les copies virtuelles écartées n'excluent pas leur
+fichier source de l'historique. Les copies fusionnées rejoignent « Doublons à retirer » et leurs fichiers sont
+mémorisés dans `photos-traitees.txt`. La vue courante reste affichée après la fusion.
+Si la photo gardée avait déjà été mise à retirer, la fusion la rétablit : elle sort de « Doublons à retirer » et de
+« Rafales à retirer », et son chemin est enlevé des exclusions de `photos-traitees.txt`. L'ancien historique est
+conservé dans un fichier `.bak`. La commande vérifie que la gardée n'est plus dans une collection de retrait
+avant d'annoncer la réussite. Pour réparer un ancien groupe où toutes les copies avaient été écartées, relancer
+la fusion forcée sur le groupe et confirmer la photo à garder.
 
 ### Réduire les rafales…
 
@@ -143,6 +170,7 @@ Affiche un dossier ou une collection, puis lance la commande (réglages : 1 cadr
   les ignore lors des prochaines réductions et « Recréer les albums » ne les réintroduit pas après vidage de la
   collection. Pour les reprendre en compte, retire leurs lignes du fichier ; pour retraiter la rafale, ôte aussi le
   mot-clé « Rafale traitée » de toutes ses photos.
+- Ctrl+Z annule ensemble la mise à l'écart, le mot-clé et l'historique. La vue courante reste affichée.
 
 Pour juger un dossier sans toucher à Lightroom, `node rafales-a-blanc.mjs 2026-08-15` produit un rapport HTML avec
 les miniatures (options : `--sous-dossiers`, `--bloc N`, `--ignorer "collection"` ; Node 22.13 ou plus). Il lit le
@@ -168,12 +196,13 @@ Depuis mars 2025, l'API ne permet de compléter que les albums créés par l'app
 ## Tests
 
 ```
-node tests/lancer.mjs             # les six suites (une minute)
+node tests/lancer.mjs             # les six suites Lua et les règles des rafales en JavaScript
 node tests/lancer.mjs --mutants   # puis casse une règle à la fois : les tests doivent échouer (quelques minutes)
 ```
 
 Ils tournent hors de Lightroom avec `texlua` (le Lua de MiKTeX ; variable `TEXLUA` pour un autre chemin), un faux
-Lightroom et le vrai ImageMagick.
+Lightroom et le vrai ImageMagick. Les tests JavaScript vérifient les règles du rapport des rafales à blanc,
+notamment les numéros Pixel, les noms sans numéro et les exclusions persistantes.
 
 ## À savoir
 
@@ -207,7 +236,7 @@ Lightroom et le vrai ImageMagick.
 | `telecharger-manquantes.mjs` | Télécharge les photos absentes du catalogue |
 | `chrome.mjs`, `csv.mjs` | Code commun aux deux scripts |
 | `connexion-google-photos.mjs` | Connexion à Google pour l'export « Google Photos » (lancé par le module au besoin) |
-| `rafales-a-blanc.mjs` | Rapport HTML des rafales d'un dossier, sans rien modifier |
+| `rafales-a-blanc.mjs`, `rafales-regles.mjs` | Rapport HTML des rafales d'un dossier et ses règles, sans rien modifier |
 | `albums-google-photos.lrplugin` | Module Lightroom. Recréer les albums : `RecreerAlbums.lua` (principal), `Correspondance.lua` (retrouver une photo), `Epoques.lua` (périodes), `Noms.lua` (noms des collections). Doublons : `FusionnerDoublons.lua`, `Doublons.lua`, `Empreintes.lua`, `Similitude.lua`, `RapportHtml.lua` (page du rapport). Rafales : `ReduireRafales.lua`, `Rafales.lua`. Export Google Photos : `ServiceGooglePhotos.lua`, `GooglePhotos.lua`, `Json.lua`, `presets\`. Commun : `Vignettes.lua` (ImageMagick), `Parallele.lua`, `Catalogue.lua`, `Csv.lua` |
 | `tests\` | Tests du module, hors de Lightroom (`node tests/lancer.mjs`) |
 | `albums-tous.csv`, `photos-albums-tous.csv` | Export des albums (inutile d'y toucher) |

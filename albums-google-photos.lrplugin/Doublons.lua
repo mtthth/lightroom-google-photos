@@ -212,20 +212,54 @@ function M.decider(copies)
   }
 end
 
+-- Proposition de la fusion manuelle : résolution, note, simplicité du nom. Le poids ne sert qu'à
+-- départager les égalités : il peut varier à cause des métadonnées sans améliorer l'image.
+-- Trie les copies sur place et renvoie vrai si toutes les résolutions sont connues.
+function M.classerManuellement(copies)
+  local parResolution = true
+  for _, c in ipairs(copies) do
+    if not c.pixels or c.pixels <= 0 then parResolution = false end
+  end
+  table.sort(copies, function(a, b)
+    if parResolution and a.pixels ~= b.pixels then return a.pixels > b.pixels end
+    if (a.note or 0) ~= (b.note or 0) then return (a.note or 0) > (b.note or 0) end
+    local suffixeA, suffixeB = M.longueurSuffixe(a.chemin), M.longueurSuffixe(b.chemin)
+    if suffixeA ~= suffixeB then return suffixeA < suffixeB end
+    local nomA = (a.chemin:match('[^/\\]+$') or a.chemin):gsub('%.[^%.]*$', '')
+    local nomB = (b.chemin:match('[^/\\]+$') or b.chemin):gsub('%.[^%.]*$', '')
+    if #nomA ~= #nomB then return #nomA < #nomB end
+    if (a.octets or 0) ~= (b.octets or 0) then return (a.octets or 0) > (b.octets or 0) end
+    local rangA, rangB = M.rangDossier(a.chemin), M.rangDossier(b.chemin)
+    if rangA ~= rangB then return rangA < rangB end
+    return a.id < b.id
+  end)
+  return parResolution
+end
+
 -- Ce que la fusion d'un groupe change, calculé une fois pour le rapport et pour l'application : la copie
 -- gardée prend la place des copies retirées dans leurs collections, et récupère ce qui lui manque.
 -- decision : résultat de decider ; chaque copie porte, quand elle est lue dans Lightroom :
 --   collections = { { id, nom, dynamique, exclue, objet }… }   (exclue : une corbeille, jamais recopiée)
 --   motsCles = { { nom, objet }… }, note, drapeau (-1 = rejetée, 1 = retenue), gps, textes = { clé = texte }.
 -- Les collections dynamiques se recalculent seules : elles ne sont pas touchées.
--- Renvoie { collections (que la gardée rejoint), quittees = { { collection, copie }… } (les retirées en sortent),
+-- Renvoie { collections (que la gardée rejoint), collectionsFinales (toutes ses collections ordinaires après fusion),
+--           corbeillesGardee (collections de retrait dont la gardée doit sortir),
+--           quittees = { { collection, copie }… } (les retirées en sortent),
 --           motsCles (à ajouter), note, drapeau, gps (à poser, ou nil), textes = { { cle, valeur }… } }.
 function M.effets(decision)
   local garde = decision.garde
-  local e = { collections = {}, quittees = {}, motsCles = {}, textes = {} }
+  local e = { collections = {}, collectionsFinales = {}, corbeillesGardee = {}, quittees = {}, motsCles = {}, textes = {} }
 
   local dedans = {}
-  for _, col in ipairs(garde.collections or {}) do dedans[col.id] = true end
+  for _, col in ipairs(garde.collections or {}) do
+    if not dedans[col.id] and col.exclue and not col.dynamique then
+      e.corbeillesGardee[#e.corbeillesGardee + 1] = col
+    end
+    if not dedans[col.id] and not col.dynamique and not col.exclue then
+      e.collectionsFinales[#e.collectionsFinales + 1] = col
+    end
+    dedans[col.id] = true
+  end
   local motsCles = {}
   for _, mot in ipairs(garde.motsCles or {}) do motsCles[mot.nom] = true end
   local note, drapeau, gps = garde.note or 0, garde.drapeau or 0, garde.gps
@@ -239,6 +273,7 @@ function M.effets(decision)
         if not dedans[col.id] then
           dedans[col.id] = true
           e.collections[#e.collections + 1] = col
+          e.collectionsFinales[#e.collectionsFinales + 1] = col
         end
       end
     end

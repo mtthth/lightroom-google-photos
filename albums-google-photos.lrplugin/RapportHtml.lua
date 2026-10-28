@@ -120,6 +120,11 @@ end
 -- Les changements d'un groupe fusionné, en phrases (voir Doublons.effets).
 local function lignesEffets(e, collectionARetirer)
   local l = {}
+  if #(e.corbeillesGardee or {}) > 0 then
+    local noms = {}
+    for _, col in ipairs(e.corbeillesGardee) do noms[#noms + 1] = col.nom end
+    l[#l + 1] = 'La copie gardée quitte les collections de retrait : ' .. guillemets(noms)
+  end
   if #e.collections > 0 then
     local noms = {}
     for i, col in ipairs(e.collections) do noms[i] = col.nom end

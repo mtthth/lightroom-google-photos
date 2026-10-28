@@ -12,9 +12,11 @@ local LrTasks = import 'LrTasks'
 local LrView = import 'LrView'
 
 local Catalogue = require 'Catalogue'
+local Annulation = require 'Annulation'
 local Doublons = require 'Doublons'
 local Epoques = require 'Epoques'
 local Historique = require 'Historique'
+local Noms = require 'Noms'
 
 local COLLECTION_DOUBLONS = Doublons.COLLECTION
 local CORBEILLES = { [Doublons.COLLECTION] = true, ['Rafales à retirer'] = true }
@@ -43,20 +45,22 @@ end
 
 local function lireCopies(catalogue, photos)
   local brutes = catalogue:batchGetRawMetadata(photos,
-    { 'path', 'fileSize', 'dateTimeOriginal', 'isVirtualCopy', 'countVirtualCopies' })
+    { 'path', 'fileSize', 'dateTimeOriginal', 'isVirtualCopy', 'masterPhoto', 'countVirtualCopies', 'width', 'height', 'dimensions' })
   local copies = {}
   for _, photo in ipairs(photos) do
     local b = brutes[photo] or {}
-    if b.isVirtualCopy then
-      return nil, 'La sélection contient une copie virtuelle Lightroom. Elle doit rester rattachée à sa photo d’origine.'
-    end
     if not b.path then
       return nil, 'Au moins une photo sélectionnée n’a pas de chemin de fichier lisible dans le catalogue.'
     end
+    local dimensions = type(b.dimensions) == 'table' and b.dimensions or {}
+    local largeur, hauteur = tonumber(b.width or dimensions.width), tonumber(b.height or dimensions.height)
     copies[#copies + 1] = {
       photo = photo, id = photo.localIdentifier, chemin = b.path, taille = b.fileSize or 0,
       octets = b.fileSize or 0, date = b.dateTimeOriginal, virtuelles = b.countVirtualCopies or 0,
+      virtuelle = b.isVirtualCopy or false, maitre = b.masterPhoto,
       collections = {}, motsCles = {}, textes = {}, note = 0, drapeau = 0,
+      largeur = largeur, hauteur = hauteur,
+      pixels = largeur and hauteur and largeur > 0 and hauteur > 0 and largeur * hauteur or nil,
     }
   end
   return copies
@@ -66,7 +70,7 @@ local function lireCollections(photo)
   local r = {}
   for _, collection in ipairs(photo:getContainedCollections()) do
     r[#r + 1] = {
-      objet = collection, id = collection.localIdentifier, nom = Catalogue.etiquetteCollection(collection),
+      objet = collection, id = collection.localIdentifier, nom = Catalogue.etiquetteCollection(collection, true),
       dynamique = collection:isSmartCollection(), exclue = CORBEILLES[collection:getName()] or false,
     }
   end
@@ -88,11 +92,14 @@ local function completerDetails(catalogue, copies, progression)
     parPhoto[c.photo] = c
   end
   local brutes = catalogue:batchGetRawMetadata(photos, { 'rating', 'pickStatus', 'keywords', 'gps' })
-  local formatees = catalogue:batchGetFormattedMetadata(photos, Doublons.CHAMPS_TEXTE)
+  local champs = { 'copyName' }
+  for _, cle in ipairs(Doublons.CHAMPS_TEXTE) do champs[#champs + 1] = cle end
+  local formatees = catalogue:batchGetFormattedMetadata(photos, champs)
   for _, photo in ipairs(photos) do
     local c, b, f = parPhoto[photo], brutes[photo] or {}, formatees[photo] or {}
     c.retouchee = estRetouchee[c.id] or false
     c.note, c.drapeau, c.gps = b.rating or 0, b.pickStatus or 0, b.gps
+    c.nomCopie = f.copyName or ''
     for _, mot in ipairs(b.keywords or {}) do c.motsCles[#c.motsCles + 1] = { objet = mot, nom = mot:getName() } end
     c.textes = {}
     for _, cle in ipairs(Doublons.CHAMPS_TEXTE) do c.textes[cle] = f[cle] or '' end
@@ -101,11 +108,45 @@ local function completerDetails(catalogue, copies, progression)
   end
 end
 
-local function choisirGardee(contexte, copies)
+local function decrireCopie(c)
+  return (c.pixels and string.format('%d × %d px', c.largeur, c.hauteur) or 'résolution inconnue')
+    .. string.format(' · %d étoile(s) · %.2f Mo', c.note or 0, c.taille / 1024 / 1024)
+    .. (c.virtuelle and (' · copie virtuelle' .. (c.nomCopie ~= '' and (' « ' .. c.nomCopie .. ' »') or '')) or '')
+end
+
+local function choisirGardee(contexte, copies, parResolution)
   local f = LrView.osFactory()
   local proprietes = LrBinding.makePropertyTable(contexte)
   local choix = {}
-  for _, c in ipairs(copies) do choix[#choix + 1] = { title = c.chemin, value = c.id } end
+  local originaux = {}
+  for _, c in ipairs(copies) do if not c.virtuelle then originaux[cleChemin(c.chemin)] = true end end
+  local avecOriginalSelectionne = false
+  local avecOriginalEcarte = false
+  for _, c in ipairs(copies) do
+    local originalEcarte = false
+    if c.virtuelle and c.maitre then
+      for _, collection in ipairs(c.maitre:getContainedCollections()) do
+        if CORBEILLES[collection:getName()] then originalEcarte = true; break end
+      end
+    end
+    -- Retirer l'original du catalogue retirerait aussi sa copie virtuelle : elle ne peut pas être
+    -- la gardée quand cet original est sélectionné ou déjà mis à retirer hors de la sélection.
+    if c.virtuelle and originaux[cleChemin(c.chemin)] then
+      avecOriginalSelectionne = true
+    elseif originalEcarte then
+      avecOriginalEcarte = true
+    else
+      choix[#choix + 1] = {
+        title = (#choix == 0 and 'Conseillée — ' or '') .. decrireCopie(c) .. ' — ' .. c.chemin, value = c.id,
+      }
+    end
+  end
+  if #choix == 0 then
+    LrDialogs.message('Fusion manuelle impossible', 'Aucune photo de la sélection ne peut être gardée : '
+      .. 'les originaux de ces copies virtuelles sont dans une collection « à retirer ». '
+      .. 'Rétablis d’abord leurs originaux avant de relancer la fusion.', 'warning')
+    return nil
+  end
   proprietes.gardee = choix[1].value
   local reponse = LrDialogs.presentModalDialog {
     title = 'Fusion manuelle',
@@ -113,14 +154,31 @@ local function choisirGardee(contexte, copies)
       bind_to_object = proprietes,
       spacing = f:control_spacing(),
       f:static_text {
-        title = string.format('%d photos sélectionnées seront considérées comme une seule photo, sans comparaison '
-          .. 'de leur contenu. Choisis celle qui restera au catalogue. Les autres quitteront leurs collections '
-          .. 'ordinaires et seront placées dans « %s » ; les collections dynamiques restent calculées par Lightroom.',
+        title = string.format('%d photos sélectionnées seront traitées comme un seul groupe, sans comparaison '
+          .. 'de leur contenu. Choisis celle qui récupère les albums et métadonnées. Les autres quitteront leurs '
+          .. 'collections ordinaires et seront placées dans « %s ». Elles restent dans le catalogue jusqu’à leur retrait manuel.',
           #copies, COLLECTION_DOUBLONS),
-        width = 560, height_in_lines = 4,
+        width = 560, height_in_lines = 5,
       },
-      f:static_text { title = 'Photo à garder :' },
+      f:static_text {
+        title = parResolution
+          and 'Proposition : plus grande résolution, puis meilleure note, puis nom le plus simple.'
+          or 'Résolution incomplète : proposition selon la note puis le nom ; le poids départage les égalités.',
+        width = 560, height_in_lines = 2,
+      },
+      f:static_text { title = 'Photo à garder (la proposition est présélectionnée) :' },
       f:popup_menu { value = LrView.bind('gardee'), items = choix, width_in_chars = 72 },
+      f:static_text {
+        title = avecOriginalSelectionne
+          and 'Une copie virtuelle et son original sont sélectionnés : garde un original pour conserver le fichier support.' or '',
+        visible = avecOriginalSelectionne, width = 560, height_in_lines = 2,
+      },
+      f:static_text {
+        title = avecOriginalEcarte
+          and 'Les copies virtuelles dont l’original est dans une collection « à retirer » ne peuvent pas être gardées. '
+            .. 'Rétablis d’abord leur original si tu veux les conserver.' or '',
+        visible = avecOriginalEcarte, width = 560, height_in_lines = 3,
+      },
     },
     actionVerb = 'Continuer',
   }
@@ -129,23 +187,50 @@ local function choisirGardee(contexte, copies)
   return nil
 end
 
-local function validerRetirees(decision)
-  local problemes = {}
-  for _, c in ipairs(decision.retirees) do
-    if c.retouchee then problemes[#problemes + 1] = nomFichier(c.chemin) .. ' est retouchée dans Lightroom' end
-    if c.virtuelles > 0 then problemes[#problemes + 1] = nomFichier(c.chemin) .. ' a des copies virtuelles' end
-    if c.publiee then problemes[#problemes + 1] = nomFichier(c.chemin) .. ' est dans une collection publiée' end
+local function decrireCollections(decision)
+  local albums, autres = {}, {}
+  local prefixe = Noms.ENSEMBLE_ALBUMS .. ' / '
+  for _, col in ipairs(decision.effets.collectionsFinales) do
+    local liste = col.nom:sub(1, #prefixe) == prefixe and albums or autres
+    liste[#liste + 1] = col.nom
   end
-  return problemes
+  table.sort(albums)
+  table.sort(autres)
+  local texte = #albums > 0 and ('Albums après fusion (' .. #albums .. ') :\n• ' .. table.concat(albums, '\n• '))
+    or 'Albums après fusion : aucun album Google Photos dans les appartenances actuelles de la sélection.'
+  if #autres > 0 then
+    texte = texte .. '\n\nAutres collections après fusion :\n• ' .. table.concat(autres, '\n• ')
+  end
+  return texte
+end
+
+local function avertissementsRetirees(decision)
+  local avertissements = {}
+  for _, c in ipairs(decision.retirees) do
+    if c.retouchee then avertissements[#avertissements + 1] = nomFichier(c.chemin) .. ' est retouchée dans Lightroom' end
+    if c.virtuelle then avertissements[#avertissements + 1] = nomFichier(c.chemin) .. ' est une copie virtuelle' end
+    if c.virtuelles > 0 then avertissements[#avertissements + 1] = nomFichier(c.chemin) .. ' a des copies virtuelles' end
+    if c.publiee then avertissements[#avertissements + 1] = nomFichier(c.chemin) .. ' est dans une collection publiée' end
+  end
+  return avertissements
 end
 
 local function appliquer(catalogue, decision)
+  local photos = {}
+  for _, c in ipairs(decision.retirees) do
+    if not c.virtuelle and cleChemin(c.chemin) ~= cleChemin(decision.garde.chemin) then
+      photos[#photos + 1] = {
+        chemin = c.chemin, fichier = nomFichier(c.chemin),
+        date = c.date and Epoques.texte(Epoques.depuisLightroom(c.date, 0)) or '',
+      }
+    end
+  end
   local corbeille
-  catalogue:withWriteAccessDo('Créer la collection des doublons', function()
+  local historiqueOk, erreurHistorique = Annulation.action(catalogue, HISTORIQUE, 'Fusion manuelle de photos',
+    { retablir = { decision.garde.chemin }, type = 'doublon', photos = photos }, function()
     corbeille = catalogue:createCollection(COLLECTION_DOUBLONS, nil, true)
-  end, { timeout = 30 })
-  catalogue:withWriteAccessDo('Fusion manuelle de photos', function()
     local e, garde = decision.effets, decision.garde.photo
+    for _, col in ipairs(e.corbeillesGardee) do col.objet:removePhotos({ garde }) end
     for _, col in ipairs(e.collections) do col.objet:addPhotos({ garde }) end
     for _, q in ipairs(e.quittees) do q.collection.objet:removePhotos({ q.copie.photo }) end
     for _, mot in ipairs(e.motsCles) do garde:addKeyword(mot.objet) end
@@ -156,21 +241,17 @@ local function appliquer(catalogue, decision)
     local retirees = {}
     for i, c in ipairs(decision.retirees) do retirees[i] = c.photo end
     corbeille:addPhotos(retirees)
-  end, { timeout = 120 })
-
-  local photos = {}
-  for _, c in ipairs(decision.retirees) do
-    -- L'historique porte sur les fichiers, pas les entrées du catalogue. Si Lightroom a deux fiches
-    -- pour le même chemin, ne pas marquer le fichier gardé comme retiré.
-    if cleChemin(c.chemin) ~= cleChemin(decision.garde.chemin) then
-      photos[#photos + 1] = {
-        chemin = c.chemin, fichier = nomFichier(c.chemin),
-        date = c.date and Epoques.texte(Epoques.depuisLightroom(c.date, 0)) or '',
-      }
+    corbeille:removePhotos({ garde })
+  end)
+  for _, col in ipairs(decision.garde.photo:getContainedCollections()) do
+    if CORBEILLES[col:getName()] then
+      error('La photo gardée est encore dans « ' .. col:getName() .. ' ». Ne retire aucune photo du catalogue.', 0)
     end
   end
-  Historique.ajouter(HISTORIQUE, 'doublon', photos)
-  return corbeille
+  if historiqueOk and Historique.contient(Historique.lire(HISTORIQUE), decision.garde.chemin) then
+    error('La photo gardée reste exclue dans l’historique. Ne retire aucune photo du catalogue.', 0)
+  end
+  return historiqueOk, erreurHistorique
 end
 
 LrTasks.startAsyncTask(function()
@@ -189,40 +270,54 @@ LrTasks.startAsyncTask(function()
       if not copies then progression:done(); LrDialogs.message('Fusion manuelle impossible', message, 'critical'); return end
       etape = 'lecture des métadonnées'
       completerDetails(catalogue, copies, progression)
+      local parResolution = Doublons.classerManuellement(copies)
       progression:done()
 
-      local garde = choisirGardee(contexte, copies)
+      local garde = choisirGardee(contexte, copies, parResolution)
       if not garde then return end
       local retirees = {}
       for _, c in ipairs(copies) do if c ~= garde then retirees[#retirees + 1] = c end end
       local decision = { garde = garde, retirees = retirees }
-      local problemes = validerRetirees(decision)
-      if #problemes > 0 then
-        LrDialogs.message('Fusion manuelle impossible', 'Pour éviter de perdre des données, la fusion est bloquée :\n\n'
-          .. table.concat(problemes, '\n') .. '\n\nChoisis comme photo à garder une photo retouchée ou avec des copies virtuelles, '
-          .. 'ou retire-la de la sélection. Les photos publiées doivent être retirées de leurs collections publiées avant la fusion.',
-          'warning')
-        return
-      end
+      local avertissements = avertissementsRetirees(decision)
       decision.effets = Doublons.effets(decision)
 
-      local lignes, destination = {}, {}
-      for _, c in ipairs(retirees) do lignes[#lignes + 1] = '• ' .. c.chemin end
-      for _, col in ipairs(decision.effets.collections) do destination[#destination + 1] = col.nom end
-      local texteDestination = #destination > 0 and ('La photo gardée rejoindra les collections : '
-        .. table.concat(destination, ', ') .. '.') or 'Aucune nouvelle collection ne sera ajoutée à la photo gardée.'
-      local messageConfirmation = 'Photo gardée :\n' .. garde.chemin .. '\n\nPhotos qui seront mises dans « '
-        .. COLLECTION_DOUBLONS .. ' » :\n' .. table.concat(lignes, '\n') .. '\n\n' .. texteDestination
-        .. '\nLes albums et collections ordinaires seront réunis sur la photo gardée. Les métadonnées manquantes '
-        .. 'seront fusionnées et les fichiers retirés mémorisés dans photos-traitees.txt.'
-      if LrDialogs.confirm('Confirmer la fusion manuelle ?', messageConfirmation, 'Fusionner', 'Annuler') ~= 'ok' then return end
+      local lignes = {}
+      for _, c in ipairs(retirees) do
+        lignes[#lignes + 1] = '• ' .. c.chemin
+          .. (c.virtuelle and (' (copie virtuelle' .. (c.nomCopie ~= '' and (' « ' .. c.nomCopie .. ' »') or '') .. ')') or '')
+      end
+      local texteDestination = decrireCollections(decision)
+      if #decision.effets.corbeillesGardee > 0 then
+        texteDestination = texteDestination .. '\n\nLa photo gardée sera sortie des collections « à retirer » où elle se trouve déjà.'
+      end
+      local messageConfirmation = 'Photo gardée :\n' .. garde.chemin .. '\n' .. decrireCopie(garde)
+        .. '\n\n' .. texteDestination .. '\n\nPhotos qui seront mises dans « '
+        .. COLLECTION_DOUBLONS .. ' » :\n' .. table.concat(lignes, '\n')
+        .. '\n\nMétadonnées : note la plus haute, mots-clés réunis, drapeau retenu prioritaire sur rejeté ; '
+        .. 'textes et GPS de la photo gardée conservés, champs vides complétés avec les autres copies.'
+        .. '\nLes fichiers retirés seront mémorisés dans photos-traitees.txt.'
+      if #avertissements > 0 then
+        messageConfirmation = messageConfirmation .. '\n\nÉléments non transférés :\n• '
+          .. table.concat(avertissements, '\n• ')
+          .. '\nLes réglages de développement, les copies virtuelles et les appartenances publiées restent sur les '
+          .. 'copies écartées tant qu’elles sont au catalogue. Leur retrait ultérieur fera perdre ces éléments.'
+      end
+      if LrDialogs.confirm('Confirmer la fusion manuelle ?', messageConfirmation, 'Fusionner de force', 'Annuler') ~= 'ok' then return end
 
-      etape = 'application de la fusion'
-      local corbeille = appliquer(catalogue, decision)
-      LrTasks.pcall(function() catalogue:setActiveSources({ corbeille }) end)
-      LrDialogs.message('Fusion manuelle terminée', string.format(
-        '%d photos fusionnées. La photo gardée est dans « %s » ; les %d autres sont dans « %s » et dans photos-traitees.txt.',
-        #copies, nomFichier(garde.chemin), #retirees, COLLECTION_DOUBLONS), 'info')
+      etape = 'préparation de l’historique et fusion annulable'
+      local historiqueOk, erreurHistorique = appliquer(catalogue, decision)
+      local bilan = string.format('%d photos fusionnées. Photo gardée :\n%s\n\n%s\n\nLes %d autres sont dans « %s ».',
+        #copies, garde.chemin, texteDestination, #retirees, COLLECTION_DOUBLONS)
+        .. '\nLa photo gardée a été vérifiée hors des collections de retrait. Les copies écartées restent visibles '
+        .. 'dans les dossiers tant qu’elles ne sont pas retirées du catalogue.'
+        .. '\nCtrl+Z annule cette fusion complète, y compris l’historique des exclusions.'
+      if historiqueOk then
+        LrDialogs.message('Fusion manuelle terminée', bilan .. '\nHistorique enregistré dans photos-traitees.txt.', 'info')
+      else
+        LrDialogs.message('Fusion effectuée, historique non enregistré', bilan
+          .. '\n\nLa fusion a bien été appliquée. Garde les copies dans cette collection tant que l’historique '
+          .. 'n’est pas enregistré.\n' .. tostring(erreurHistorique), 'warning')
+      end
     end)
     if not ok then
       LrDialogs.message('Erreur pendant la fusion manuelle', string.format('Étape : %s\n%s', etape, tostring(erreur)), 'critical')

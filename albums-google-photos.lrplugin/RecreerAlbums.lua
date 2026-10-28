@@ -27,6 +27,7 @@ local Doublons = require 'Doublons'
 local Empreintes = require 'Empreintes'
 local Epoques = require 'Epoques'
 local Historique = require 'Historique'
+local Annulation = require 'Annulation'
 local Noms = require 'Noms'
 local Rafales = require 'Rafales'
 
@@ -233,6 +234,7 @@ local function indexerCatalogue(catalogue, progression, problemes)
   progression:setCaption('Lecture du catalogue : liste des photos…')
   local photos = catalogue:getAllPhotos()
   local ignorees, nbIgnorees = copiesEnTrop(catalogue)
+  Annulation.synchroniser(catalogue, HISTORIQUE)
   local historique = Historique.lire(HISTORIQUE)
   local index = Correspondance.nouvelIndex()
   index.traitees = Correspondance.nouvelIndex()

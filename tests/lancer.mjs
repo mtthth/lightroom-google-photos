@@ -9,6 +9,7 @@
 //
 // Suites : doublons (fusion), vignettes (copies réduites, netteté, ImageMagick réel), rapport (page HTML
 // des doublons, aperçus), rafales, service (export vers Google Photos), json.
+// Complément JavaScript : règles du rapport des rafales à blanc, sans catalogue personnel.
 // --mutants : casse ensuite une règle à la fois dans une copie du module et vérifie que les tests
 // échouent (environ 3 minutes).
 
@@ -46,6 +47,13 @@ try {
       echecs++;
       for (const l of lignes.filter((x) => !/vérifications/.test(x)).slice(0, 12)) console.log('         ' + l);
     }
+  }
+  try {
+    const sortie = execFileSync(process.execPath, [path.join(dossierTests, 'test_rafales_node.mjs')], { encoding: 'utf8' });
+    console.log('ok      rafales JS ' + sortie.trim());
+  } catch (erreur) {
+    echecs++;
+    console.log('ÉCHEC   rafales JS\n' + (erreur.stdout ?? '') + (erreur.stderr ?? ''));
   }
   if (process.argv.includes('--mutants')) {
     try {

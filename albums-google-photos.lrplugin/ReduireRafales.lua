@@ -10,7 +10,7 @@
 --    publiés, ou qui ont une version retouchée dans un éditeur externe (-Modifier, DxO_…).
 -- 4. Après confirmation, les autres cadres (tous leurs fichiers : RAW + JPEG, copies…) sont mis dans la
 --    collection « Rafales à retirer ». Rien n'est supprimé : le SDK de Lightroom ne le permet pas. Il
---    reste à ouvrir la collection, tout sélectionner et appuyer sur Suppr.
+--    reste à sélectionner ces photos dans « Toutes les photos », puis Suppr → Retirer.
 -- 5. Toutes les photos des rafales traitées (gardées comme retirées) reçoivent le mot-clé « Rafale
 --    traitée », non exporté. La collection « Rafales à retirer » sera vidée une fois les cadres
 --    supprimés : le mot-clé est la mémoire qui empêche une relance de réduire une seconde fois les cadres
@@ -34,6 +34,7 @@ local Csv = require 'Csv'
 local Doublons = require 'Doublons'
 local Epoques = require 'Epoques'
 local Historique = require 'Historique'
+local Annulation = require 'Annulation'
 local Parallele = require 'Parallele'
 local Rafales = require 'Rafales'
 local Vignettes = require 'Vignettes'
@@ -221,6 +222,7 @@ LrTasks.startAsyncTask(function()
       -- déjà traitées (la collection sera vidée une fois les cadres supprimés, le mot-clé reste).
       local ignorees = Catalogue.photosDesCollections(catalogue, { Doublons.COLLECTION, Rafales.COLLECTION })
       for id in pairs((Catalogue.photosAvecMotCle(catalogue, Rafales.MOT_CLE))) do ignorees[id] = true end
+      Annulation.synchroniser(catalogue, HISTORIQUE)
       local historique = Historique.lire(HISTORIQUE)
       local photos = source.photos(options.sousDossiers)
       local fichiers, nbIgnorees = lireFichiers(catalogue, photos, ignorees, historique, progression)
@@ -298,26 +300,27 @@ LrTasks.startAsyncTask(function()
       local aRetirer = Rafales.photosARetirer(rafales)
       local traitees = Rafales.photosTraitees(rafales)
       local collection
-      catalogue:withWriteAccessDo('Mettre de côté les rafales en trop', function()
+      local historiqueOk, erreurHistorique = Annulation.action(catalogue, HISTORIQUE, 'Réduire les rafales',
+        { type = 'rafale', photos = historiqueARetirer(rafales) }, function()
         collection = catalogue:createCollection(Rafales.COLLECTION, nil, true)
-        if collection then collection:addPhotos(aRetirer) end
+        if not collection then error('Lightroom a refusé de créer la collection « ' .. Rafales.COLLECTION .. ' ».', 0) end
+        collection:addPhotos(aRetirer)
         -- Mot-clé non exporté, posé sur toutes les photos des rafales traitées.
         local motCle = catalogue:createKeyword(Rafales.MOT_CLE, {}, false, nil, true)
-        if motCle then
-          for _, photo in ipairs(traitees) do photo:addKeyword(motCle) end
-        end
-      end, { timeout = 120 })
-      if not collection then error('Lightroom a refusé de créer la collection « ' .. Rafales.COLLECTION .. ' ».', 0) end
-      Historique.ajouter(HISTORIQUE, 'rafale', historiqueARetirer(rafales))
-      LrTasks.pcall(function() catalogue:setActiveSources({ collection }) end)
-      LrDialogs.message('Rafales mises de côté', string.format(
-        '%d cadres (%d fichiers) sont dans la collection « %s », qui vient d’être ouverte.\n\n'
-        .. 'Vérifie-les dans la grille, puis pour les retirer du catalogue : Ctrl+A, Suppr, puis « Retirer » '
-        .. '(ou « Supprimer du disque » pour libérer %s).\n\n'
+        if not motCle then error('Lightroom a refusé de créer le mot-clé « ' .. Rafales.MOT_CLE .. ' ».', 0) end
+        for _, photo in ipairs(traitees) do photo:addKeyword(motCle) end
+      end)
+      local messageFinal = string.format(
+        '%d cadres (%d fichiers) sont dans la collection « %s ».\n\n'
+        .. 'Pour terminer le retrait, sélectionne uniquement ces copies dans « Catalogue → Toutes les photos », '
+        .. 'puis Suppr → « Retirer » (espace récupérable sur disque : %s).\n\n'
         .. 'Les photos de ces rafales ont reçu le mot-clé « %s » : les prochaines réductions les ignorent, même une '
         .. 'fois la collection vidée. Les fichiers retirés sont mémorisés dans %s. Pour les retraiter, supprime '
         .. 'leurs lignes de cet historique et ôte le mot-clé de toutes les photos de la rafale.',
-        bilan.retires, bilan.fichiersRetires, Rafales.COLLECTION, taille(bilan.octetsRetires), Rafales.MOT_CLE, HISTORIQUE), 'info')
+        bilan.retires, bilan.fichiersRetires, Rafales.COLLECTION, taille(bilan.octetsRetires), Rafales.MOT_CLE, HISTORIQUE)
+        .. '\n\nCtrl+Z annule la réduction complète : collection, mot-clé et historique des exclusions.'
+      if not historiqueOk then messageFinal = messageFinal .. '\nHistorique texte à synchroniser : ' .. tostring(erreurHistorique) end
+      LrDialogs.message('Rafales mises de côté', messageFinal, historiqueOk and 'info' or 'warning')
     end)
     if not ok then
       LrDialogs.message('Erreur pendant la réduction des rafales',

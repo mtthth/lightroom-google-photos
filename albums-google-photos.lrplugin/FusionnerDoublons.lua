@@ -26,8 +26,8 @@
 --    Ne sont pas recopiés : réglages de développement (une copie retouchée dans Lightroom est
 --    toujours la gardée, sinon le groupe reste « à vérifier »), copies virtuelles, instantanés,
 --    piles, collections publiées (groupe « à vérifier »), fichiers annexes sur le disque (.xmp, .on1).
--- Le SDK de Lightroom ne permet pas de retirer une photo du catalogue : il reste à ouvrir cette
--- collection, tout sélectionner et appuyer sur Suppr.
+-- Le module laisse les copies écartées au catalogue. Leur retrait volontaire se termine en les
+-- sélectionnant dans « Toutes les photos », puis Suppr → Retirer.
 
 local LrApplication = import 'LrApplication'
 local LrBinding = import 'LrBinding'
@@ -42,6 +42,7 @@ local LrTasks = import 'LrTasks'
 local LrView = import 'LrView'
 
 local Catalogue = require 'Catalogue'
+local Annulation = require 'Annulation'
 local Csv = require 'Csv'
 local Doublons = require 'Doublons'
 local Epoques = require 'Epoques'
@@ -395,6 +396,7 @@ end
 -- rapport. À appeler dans un accès en écriture.
 local function fusionnerGroupe(decision, corbeille)
   local e, p = decision.effets, decision.garde.photo
+  for _, col in ipairs(e.corbeillesGardee) do col.objet:removePhotos({ p }) end
   for _, col in ipairs(e.collections) do col.objet:addPhotos({ p }) end
   for _, q in ipairs(e.quittees) do q.collection.objet:removePhotos({ q.copie.photo }) end
   for _, mot in ipairs(e.motsCles) do p:addKeyword(mot.objet) end
@@ -405,35 +407,53 @@ local function fusionnerGroupe(decision, corbeille)
   local retirees = {}
   for i, c in ipairs(decision.retirees) do retirees[i] = c.photo end
   corbeille:addPhotos(retirees)
+  corbeille:removePhotos({ p })
 end
 
 local function fusionner(catalogue, decisions, progression)
-  local corbeille
-  catalogue:withWriteAccessDo('Créer la collection des doublons', function()
-    corbeille = catalogue:createCollection(COLLECTION_DOUBLONS, nil, true)
-  end, { timeout = 30 })
-  local nbFusionnes = 0
-  parLots(decisions, LOT_ECRITURE, function(lot, _, fin)
-    if progression:isCanceled() then return false end
-    progression:setCaption(string.format('Fusion des doublons : %d / %d groupes', fin, #decisions))
-    catalogue:withWriteAccessDo('Fusionner des doublons', function()
-      for _, d in ipairs(lot) do fusionnerGroupe(d, corbeille) end
-    end, { timeout = 120 })
-    local photos = {}
-    for _, decision in ipairs(lot) do
-      for _, c in ipairs(decision.retirees) do
+  local photos, gardees, cheminsGardes = {}, {}, {}
+  for _, d in ipairs(decisions) do
+    gardees[#gardees + 1] = d.garde.chemin
+    cheminsGardes[d.garde.chemin:gsub('/', '\\'):lower()] = true
+  end
+  for _, d in ipairs(decisions) do
+    for _, c in ipairs(d.retirees) do
+      if not cheminsGardes[c.chemin:gsub('/', '\\'):lower()] then
         photos[#photos + 1] = {
-          chemin = c.chemin,
-          fichier = nomFichier(c.chemin),
+          chemin = c.chemin, fichier = nomFichier(c.chemin),
           date = c.date and Epoques.texte(Epoques.depuisLightroom(c.date, 0)) or '',
         }
       end
     end
-    Historique.ajouter(HISTORIQUE, 'doublon', photos)
-    nbFusionnes = fin
-    progression:setPortionComplete(fin, #decisions)
+  end
+  local corbeille
+  local historiqueOk, erreurHistorique = Annulation.action(catalogue, HISTORIQUE, 'Fusionner les doublons',
+    { retablir = gardees, type = 'doublon', photos = photos }, function()
+    corbeille = catalogue:createCollection(COLLECTION_DOUBLONS, nil, true)
+    for i, d in ipairs(decisions) do
+      if progression:isCanceled() then error('Fusion annulée : aucune modification du catalogue n’a été conservée.', 0) end
+      fusionnerGroupe(d, corbeille)
+      progression:setPortionComplete(i, #decisions)
+      if i % LOT_ECRITURE == 0 then
+        progression:setCaption(string.format('Fusion des doublons : %d / %d groupes', i, #decisions))
+        LrTasks.yield()
+      end
+    end
   end)
-  return corbeille, nbFusionnes
+  for _, d in ipairs(decisions) do
+    for _, col in ipairs(d.garde.photo:getContainedCollections()) do
+      if CORBEILLES[col:getName()] then
+        error('La photo gardée est encore dans « ' .. col:getName() .. ' ». Ne retire aucune photo du catalogue.', 0)
+      end
+    end
+  end
+  if historiqueOk then
+    local historique = Historique.lire(HISTORIQUE)
+    for _, chemin in ipairs(gardees) do
+      if Historique.contient(historique, chemin) then error('Une photo gardée reste exclue dans l’historique.', 0) end
+    end
+  end
+  return corbeille, #decisions, erreurHistorique
 end
 
 local function ko(octets)
@@ -534,6 +554,7 @@ LrTasks.startAsyncTask(function()
       local progression = LrProgressScope { title = 'Recherche des doublons', functionContext = contexte }
 
       etape = 'lecture des photos'
+      Annulation.synchroniser(catalogue, HISTORIQUE)
       local historique = Historique.lire(HISTORIQUE)
       local copies = lireCopies(catalogue, portee.photos, progression, historique)
       if not copies then return end
@@ -630,14 +651,16 @@ LrTasks.startAsyncTask(function()
 
       etape = 'fusion des doublons'
       local fusion = LrProgressScope { title = 'Fusion des doublons', functionContext = contexte }
-      local corbeille, nbFusionnes = fusionner(catalogue, aFusionner, fusion)
+      local _, nbFusionnes, erreurHistorique = fusionner(catalogue, aFusionner, fusion)
       fusion:done()
-      LrTasks.pcall(function() catalogue:setActiveSources({ corbeille }) end)
-      LrDialogs.message('Doublons fusionnés', string.format(
-        '%d groupes fusionnés sur %d. Les copies en trop sont dans la collection « %s », '
-        .. 'qui vient d’être ouverte.\n\nPour les retirer du catalogue : Ctrl+A, puis Suppr, puis '
-        .. '« Retirer » (ou « Supprimer du disque » pour libérer aussi la place sur le disque).',
-        nbFusionnes, #aFusionner, COLLECTION_DOUBLONS), 'info')
+      local bilan = string.format(
+        '%d groupes fusionnés sur %d. Les copies en trop sont dans la collection « %s ». '
+        .. '\n\nElles restent visibles dans les dossiers tant qu’elles sont au catalogue. Pour terminer le retrait, '
+        .. 'sélectionne uniquement les copies écartées dans « Catalogue → Toutes les photos », puis Suppr → « Retirer ».',
+        nbFusionnes, #aFusionner, COLLECTION_DOUBLONS)
+        .. '\n\nCtrl+Z annule cette fusion complète, y compris l’historique des exclusions.'
+      if erreurHistorique then bilan = bilan .. '\nHistorique texte à synchroniser : ' .. tostring(erreurHistorique) end
+      LrDialogs.message('Doublons fusionnés', bilan, erreurHistorique and 'warning' or 'info')
     end)
     if not ok then
       LrDialogs.message('Erreur pendant la fusion des doublons',
