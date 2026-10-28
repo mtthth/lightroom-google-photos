@@ -5,8 +5,9 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const [plugin, scratch, texlua] = process.argv.slice(2);
-const mutantsDir = scratch + '/mutant/projet/albums-google-photos.lrplugin';
+const [plugin, scratch, texlua, googlePlugin] = process.argv.slice(2);
+const mutantsDir = scratch + '/mutant/projet/lightroom-deduplicate';
+const googleMutantsDir = scratch + '/mutant/projet/albums-google-photos.lrplugin';
 
 const mutants = [
   ['la sélection est ignorée : on prend toujours toute la grille', 'Catalogue.lua',
@@ -58,7 +59,7 @@ const mutants = [
   ['le suffixe horodaté (-Modifié-2026-08-02T22-37-43) n\'est plus retiré du nom', 'Doublons.lua',
     "SUFFIXES[#SUFFIXES + 1] = marqueur .. '.*$'", "SUFFIXES[#SUFFIXES + 1] = marqueur .. '[^%-%.]*$'"],
   ['les copies en trop sont de nouveau indexées par les albums', 'RecreerAlbums.lua',
-    'if not brut.isVirtualCopy and not ignorees[photo.localIdentifier] then', 'if not brut.isVirtualCopy then'],
+    'if not brut.isVirtualCopy and not dejaIgnoree then', 'if not brut.isVirtualCopy then'],
   ["_filtered n'est plus un marqueur de retouche", 'Similitude.lua', "'[_%-]filtered',", "'zzz',"],
   ["-Modifié n'est plus un marqueur de retouche", 'Similitude.lua', "'%-modifi', ", "'%-modifier', "],
   ['les champs de texte ne sont plus recopiés', 'Doublons.lua',
@@ -80,25 +81,55 @@ const mutants = [
 
 const suites = [['test_doublons.lua', 'doublons'], ['test_vignettes.lua', 'vignettes'], ['test_rafales.lua', 'rafales'],
   ['test_rapport.lua', 'rapport']];
+
+function tester(dossierPlugin, travail, dossierGoogle, arreterAuPremier = false) {
+  const echecs = [];
+  for (const [suite, nom] of suites) {
+    const dossierSuite = path.join(travail, nom);
+    fs.mkdirSync(dossierSuite, { recursive: true });
+    try {
+      execFileSync(texlua, [path.join(__dirname, suite), dossierPlugin, dossierSuite, dossierGoogle],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) {
+      // Un processus non lancé ou interrompu ne prouve pas que la mutation a été détectée.
+      if (e.status == null) {
+        throw new Error(`Impossible d'exécuter la suite ${nom} : ${e.code || e.signal || e.message}`);
+      }
+      const sortie = (e.stdout || '') + (e.stderr || '');
+      const details = sortie.split('\n').map((l) => l.trimEnd())
+        .filter((l) => l.startsWith('ÉCHEC') || /error|erreur/i.test(l) && !l.startsWith(' '));
+      echecs.push(...(details.length ? details.map((l) => l.replace(/^ÉCHEC /, ''))
+        : [`${nom} : arrêt du test (${e.status ?? e.message})`]));
+      if (arreterAuPremier) break;
+    }
+  }
+  return echecs;
+}
+
+// Un témoin sans mutation doit passer sur des fichiers neufs : sinon les échecs ne prouvent rien.
+const controle = tester(plugin, path.join(scratch, 'controle-mutants'), googlePlugin);
+if (controle.length) {
+  console.error('ÉCHEC du témoin sans mutation : ' + controle.slice(0, 3).join(' | '));
+  process.exit(1);
+}
+console.log('ok          témoin sans mutation, fichiers de test isolés');
 let tousDetectes = true;
 for (const [nom, fichier, avant, apres] of mutants) {
   fs.rmSync(scratch + '/mutant', { recursive: true, force: true });
   fs.mkdirSync(mutantsDir, { recursive: true });
   for (const f of fs.readdirSync(plugin)) if (f.endsWith('.lua')) fs.copyFileSync(plugin + '/' + f, mutantsDir + '/' + f);
-  const chemin = mutantsDir + '/' + fichier;
+  fs.mkdirSync(googleMutantsDir, { recursive: true });
+  for (const f of fs.readdirSync(googlePlugin)) if (f.endsWith('.lua')) fs.copyFileSync(googlePlugin + '/' + f, googleMutantsDir + '/' + f);
+  const googleMutation = fichier === 'RecreerAlbums.lua';
+  const chemin = (googleMutation ? googleMutantsDir : mutantsDir) + '/' + fichier;
   const texte = fs.readFileSync(chemin, 'utf8');
   if (!texte.includes(avant)) { console.log('MOTIF ABSENT pour « ' + nom + ' »'); tousDetectes = false; continue; }
   fs.writeFileSync(chemin, texte.replace(avant, () => apres));
-  const echecs = [];
-  for (const [suite] of suites) {
-    let sortie = '';
-    try { sortie = execFileSync(texlua, [path.join(__dirname, suite), mutantsDir, scratch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); }
-    catch (e) { sortie = (e.stdout || '') + (e.stderr || ''); }
-    for (const l of sortie.split('\n')) if (l.startsWith('ÉCHEC') || /error|erreur/i.test(l) && !l.startsWith(' ')) echecs.push(l.replace(/^ÉCHEC /, ''));
-  }
+  const echecs = tester(mutantsDir, path.join(scratch, 'mutant', 'tests'), googleMutantsDir, true);
   const detecte = echecs.length > 0;
   if (!detecte) tousDetectes = false;
   console.log((detecte ? 'détecté     ' : 'NON DÉTECTÉ ') + nom + (detecte ? ' → ' + echecs.slice(0, 3).join(' | ') : ''));
 }
 fs.rmSync(scratch + '/mutant', { recursive: true, force: true });
 console.log(tousDetectes ? '\nToutes les régressions sont détectées.' : '\nAu moins une régression passe inaperçue.');
+process.exitCode = tousDetectes ? 0 : 1;

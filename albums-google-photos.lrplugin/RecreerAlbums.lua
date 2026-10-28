@@ -22,14 +22,16 @@ local LrProgressScope = import 'LrProgressScope'
 local LrTasks = import 'LrTasks'
 
 local Correspondance = require 'Correspondance'
-local Catalogue = require 'Catalogue'
-local Doublons = require 'Doublons'
+local GoogleCollections = require 'GoogleCollections'
 local Empreintes = require 'Empreintes'
 local Epoques = require 'Epoques'
 local Historique = require 'Historique'
 local Annulation = require 'Annulation'
 local Noms = require 'Noms'
-local Rafales = require 'Rafales'
+
+-- Collections de mise à l'écart gérées par le plugin Deduplicate.
+local COLLECTION_DOUBLONS = 'Doublons à retirer'
+local COLLECTION_RAFALES = 'Rafales à retirer'
 
 local TAILLE_LOT = 1000
 local ENSEMBLE_ALBUMS = Noms.ENSEMBLE_ALBUMS
@@ -225,7 +227,7 @@ end
 -- pas encore retirées du catalogue, et leur nombre. Elles sont ignorées : sinon elles reviendraient
 -- dans les albums et les époques, à la place de la copie ou du cadre gardé.
 local function copiesEnTrop(catalogue)
-  return Catalogue.photosDesCollections(catalogue, { Doublons.COLLECTION, Rafales.COLLECTION })
+  return GoogleCollections.photosDesCollections(catalogue, { COLLECTION_DOUBLONS, COLLECTION_RAFALES })
 end
 
 -- Indexe les photos du catalogue par lots, en affichant l'avancement.
@@ -598,7 +600,7 @@ LrTasks.startAsyncTask(function()
     end
     if (index.nbIgnorees or 0) > 0 then
       message = message .. string.format('\n%d photos en trop des collections « %s » et « %s » ignorées (à retirer du catalogue).',
-        index.nbIgnorees, Doublons.COLLECTION, Rafales.COLLECTION)
+        index.nbIgnorees, COLLECTION_DOUBLONS, COLLECTION_RAFALES)
     end
     if (index.nbHistoriqueIgnorees or 0) > 0 then
       message = message .. string.format('\n%d photos ignorées d’après l’historique persistant.', index.nbHistoriqueIgnorees)

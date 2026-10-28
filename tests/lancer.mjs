@@ -1,4 +1,4 @@
-// Lance les tests du module Lightroom (albums-google-photos.lrplugin) hors de Lightroom.
+// Lance les tests des deux modules Lightroom hors de Lightroom.
 //
 // Usage : node tests/lancer.mjs [--mutants]        (à lancer depuis le dossier du projet)
 //
@@ -20,7 +20,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const dossierTests = path.dirname(fileURLToPath(import.meta.url));
-const plugin = path.resolve(dossierTests, '..', 'albums-google-photos.lrplugin');
+const googlePlugin = path.resolve(dossierTests, '..', 'albums-google-photos.lrplugin');
+const deduplicatePlugin = path.resolve(dossierTests, '..', 'lightroom-deduplicate');
 const lua = process.env.TEXLUA ?? path.join(process.env.LOCALAPPDATA ?? '', 'Programs/MiKTeX/miktex/bin/x64/texlua.exe');
 if (!existsSync(lua)) {
   console.error(`texlua introuvable (${lua}). Installe MiKTeX ou indique son chemin dans la variable TEXLUA.`);
@@ -28,14 +29,19 @@ if (!existsSync(lua)) {
 }
 
 const scratch = mkdtempSync(path.join(os.tmpdir(), 'lrgp-tests-'));
-const suites = ['doublons', 'vignettes', 'rapport', 'rafales', 'service', 'json'];
+const suites = ['doublons', 'empreintes', 'vignettes', 'rapport', 'rafales', 'service', 'json'];
+const pluginParSuite = {
+  doublons: deduplicatePlugin, empreintes: deduplicatePlugin, vignettes: deduplicatePlugin,
+  rapport: deduplicatePlugin, rafales: deduplicatePlugin, service: googlePlugin, json: googlePlugin,
+};
 let echecs = 0;
 try {
   for (const suite of suites) {
     let sortie = '';
     let ok = true;
     try {
-      sortie = execFileSync(lua, [path.join(dossierTests, `test_${suite}.lua`), plugin, scratch], { encoding: 'utf8' });
+      sortie = execFileSync(lua, [path.join(dossierTests, `test_${suite}.lua`), pluginParSuite[suite], scratch,
+        ...(suite === 'doublons' ? [googlePlugin] : [])], { encoding: 'utf8' });
     } catch (erreur) {
       ok = false;
       sortie = (erreur.stdout ?? '') + (erreur.stderr ?? '');
@@ -57,7 +63,7 @@ try {
   }
   if (process.argv.includes('--mutants')) {
     try {
-      console.log(execFileSync('node', [path.join(dossierTests, 'mutants.js'), plugin, scratch, lua], { encoding: 'utf8' }));
+      console.log(execFileSync('node', [path.join(dossierTests, 'mutants.js'), deduplicatePlugin, scratch, lua, googlePlugin], { encoding: 'utf8' }));
     } catch (erreur) {
       echecs++;
       console.log((erreur.stdout ?? '') + (erreur.stderr ?? ''));

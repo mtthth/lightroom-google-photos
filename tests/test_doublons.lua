@@ -1,8 +1,8 @@
 -- Tests de Doublons.lua et Empreintes.lua, puis simulation de FusionnerDoublons.lua et de
 -- RecreerAlbums.lua avec un faux Lightroom.
-local PLUGIN, SCRATCH = arg[1], arg[2]
+local PLUGIN, SCRATCH, GOOGLE_PLUGIN = arg[1], arg[2], arg[3]
 local UndoSimule = dofile((arg[0]:match('^(.*)[/\\]') or '.') .. '/annulation_simulee.lua')
-package.path = PLUGIN .. '/?.lua;' .. package.path
+package.path = PLUGIN .. '/?.lua;' .. (GOOGLE_PLUGIN and (GOOGLE_PLUGIN .. '/?.lua;') or '') .. package.path
 os.getenv = nil
 
 local nb, echecs = 0, 0
@@ -322,11 +322,11 @@ local function jpeg(xmp, image)
   return '\255\216' .. segment(0xE0, 'JFIF\0') .. segment(0xE1, 'http://ns.adobe.com/xap/1.0/\0' .. xmp)
     .. segment(0xDA, 'SOS') .. image .. '\255\217'
 end
-local function boite(genre, donnees)
+local function boiteIso(genre, donnees)
   local n = #donnees + 8
   return string.char(math.floor(n / 16777216) % 256, math.floor(n / 65536) % 256, math.floor(n / 256) % 256, n % 256) .. genre .. donnees
 end
-local function heic(meta, image) return boite('ftyp', 'heicmif1') .. boite('meta', meta) .. boite('mdat', image) end
+local function heic(meta, image) return boiteIso('ftyp', 'heicmif1') .. boiteIso('meta', meta) .. boiteIso('mdat', image) end
 
 local J1 = jpeg('<xmp note="2"/>', 'PIXELS-A')
 local J2 = jpeg('<xmp note="5" plus="long"/>', 'PIXELS-A')
@@ -363,9 +363,11 @@ local function nouveauCatalogue(photos)
     local r = {}
     for _, p in ipairs(lot) do
       local f = io.open(p.chemin, 'rb'); local taille = f and f:seek('end'); if f then f:close() end
+      if p.poidsAbsent then taille = nil end
       r[p] = { path = p.chemin, fileSize = taille, dateTimeOriginal = p.date, isVirtualCopy = p.virtuelle or false,
         countVirtualCopies = p.nbVirtuelles or 0, rating = p.note, pickStatus = p.drapeau, keywords = p.motsCles, gps = p.gps,
-        width = p.largeur, height = p.hauteur, dimensions = p.dimensions, masterPhoto = p.maitre }
+        width = p.largeur, height = p.hauteur, dimensions = p.dimensions, masterPhoto = p.maitre,
+        isVideo = p.video, fileFormat = p.format, durationInSeconds = p.duree }
     end
     return r
   end
@@ -777,7 +779,7 @@ fm:close()
 local original = ecrire('archives/051224. Noël 2005/CIMG0638.JPG', jpeg('<lightroom note="3" long="oui"/>', 'PIXELS-CIMG0638'))
 local photoOriginale = nouvellePhoto(100, original, { date = dateLr('2005-01-07 19:15:34') })
 nouveauCatalogue({ photoOriginale })
-dofile(PLUGIN .. '/RecreerAlbums.lua')
+dofile(GOOGLE_PLUGIN .. '/RecreerAlbums.lua')
 local imports = {}
 for _, l in ipairs(journal) do if l:find('^import ') then imports[#imports + 1] = l end end
 verifier('un seul import', #imports, 1)
@@ -805,7 +807,7 @@ local photoB = nouvellePhoto(201, dupB, { date = d2006 })
 nouveauCatalogue({ photoA, photoB })
 local enTrop = nouvelleCollection(Doublons.COLLECTION)
 enTrop.photos[photoA] = true
-dofile(PLUGIN .. '/RecreerAlbums.lua')
+dofile(GOOGLE_PLUGIN .. '/RecreerAlbums.lua')
 local albumGien, epoqueGien
 for _, c in ipairs(collections) do
   if c.nom and c.nom:find('Gien') and c.nom:find('2006%-01%-02') then
@@ -1102,6 +1104,79 @@ catalogue:annuler()
 Annulation.synchroniser(catalogue, cheminUndo)
 verifier('édition externe : Ctrl+Z conserve exactement l’édition externe', Historique.contenu(cheminUndo), baseExterne)
 
+-- La fusion forcée réunit aussi des vidéos de contenus et formats différents, sans lecture Develop.
+do
+  local contexteAvant = { plugin = _PLUGIN, catalogue = catalogue, collections = collections, journal = journal,
+    dialogues = dialogues, reponses = reponses, boitesPortee = boitesPortee }
+  local projetVideos = SCRATCH .. '/projet-videos-manuelles'
+  os.execute('mkdir "' .. projetVideos:gsub('/', '\\') .. '" 2>nul')
+  _PLUGIN = { path = projetVideos .. '/albums-google-photos.lrplugin' }
+  local videoOriginale = nouvellePhoto(600, ecrire('videos/CLIP.MOV', 'contenu original vidéo'),
+    { video = true, format = 'VIDEO', duree = 12.5, largeur = 3840, hauteur = 2160, note = 5,
+      titre = 'Titre du clip', ville = 'Gien', motsCles = { motCle('Voyage') }, gps = { latitude = 1, longitude = 2 } })
+  local videoConvertie = nouvellePhoto(601, ecrire('videos/CLIP.mp4', 'vidéo convertie : contenu différent'),
+    { video = true, format = 'VIDEO', duree = 12.5, largeur = 1920, hauteur = 1080, note = 1, legende = 'Légende conservée' })
+  function videoOriginale:getDevelopSettings() error('Develop indisponible pour les vidéos') end
+  function videoConvertie:getDevelopSettings() error('Develop indisponible pour les vidéos') end
+  nouveauCatalogue({ videoOriginale, videoConvertie })
+  catalogue.selection = { videoOriginale, videoConvertie }
+  local albumOriginal = nouvelleCollection('Google Photos - albums / 2020 / Original')
+  local albumConverti = nouvelleCollection('Google Photos - albums / 2020 / Converti')
+  albumOriginal.photos[videoOriginale], albumConverti.photos[videoConvertie] = true, true
+  local boiteOriginale = mocks.LrDialogs.presentModalDialog
+  mocks.LrDialogs.presentModalDialog = function(args)
+    args.contents.bind_to_object.gardee = videoConvertie.localIdentifier
+    return boiteOriginale(args)
+  end
+  reponses, boitesPortee = { 'ok' }, {}
+  dofile(PLUGIN .. '/FusionManuelle.lua')
+  mocks.LrDialogs.presentModalDialog = boiteOriginale
+  verifier('vidéos manuelles : fusion MOV + MP4 effectuée', dialogues[#dialogues].titre, 'Fusion manuelle terminée')
+  verifier('vidéos manuelles : choix de la version convertie respecté', albumOriginal.photos[videoConvertie], true)
+  verifier('vidéos manuelles : album existant conservé', albumConverti.photos[videoConvertie], true)
+  verifier('vidéos manuelles : copie retirée de son album', albumOriginal.photos[videoOriginale], nil)
+  verifier('vidéos manuelles : type vidéo affiché', boitesPortee[1].contents[4].items[1].title:find('vidéo', 1, true) ~= nil, true)
+  verifier('vidéos manuelles : durée affichée', boitesPortee[1].contents[4].items[1].title:find('12.5 s', 1, true) ~= nil, true)
+  verifier('vidéos manuelles : coupes non transférées annoncées', dialogues[1].texte:find('coupes et réglages vidéo ne seront pas transférés', 1, true) ~= nil, true)
+  verifier('vidéos manuelles : note maximale réunie', videoConvertie.note, 5)
+  verifier('vidéos manuelles : mots-clés réunis', videoConvertie.motsCles[1].nom, 'Voyage')
+  verifier('vidéos manuelles : titre complété', videoConvertie.textes.title, 'Titre du clip')
+  verifier('vidéos manuelles : légende conservée', videoConvertie.textes.caption, 'Légende conservée')
+  verifier('vidéos manuelles : GPS complété', videoConvertie.gps.latitude, 1)
+  verifier('vidéos manuelles : une seule étape Undo', catalogue:nombreActions(), 1)
+  verifier('vidéos manuelles : original écarté mémorisé',
+    Historique.contient(Historique.lire(projetVideos .. '/photos-traitees.txt'), videoOriginale.chemin), true)
+  catalogue:annuler()
+  Annulation.synchroniser(catalogue, projetVideos .. '/photos-traitees.txt')
+  verifier('vidéos Ctrl+Z : note restaurée', videoConvertie.note, 1)
+  verifier('vidéos Ctrl+Z : mot-clé retiré', #videoConvertie.motsCles, 0)
+  verifier('vidéos Ctrl+Z : titre restauré', videoConvertie.textes.title, '')
+  verifier('vidéos Ctrl+Z : album de l’original restauré', albumOriginal.photos[videoOriginale], true)
+  verifier('vidéos Ctrl+Z : historique restauré', #Historique.lire(projetVideos .. '/photos-traitees.txt').entrees, 0)
+  catalogue:retablir()
+  Annulation.synchroniser(catalogue, projetVideos .. '/photos-traitees.txt')
+  verifier('vidéos Rétablir : note fusionnée', videoConvertie.note, 5)
+  verifier('vidéos Rétablir : albums réunis', albumOriginal.photos[videoConvertie] and albumConverti.photos[videoConvertie], true)
+  verifier('vidéos Rétablir : exclusion rétablie',
+    Historique.contient(Historique.lire(projetVideos .. '/photos-traitees.txt'), videoOriginale.chemin), true)
+
+  -- Les champs vidéo facultatifs et le poids peuvent manquer, même pour un fichier présent.
+  local videoSansDetails = nouvellePhoto(610, ecrire('videos/INCONNUE.MOV', 'vidéo sans métadonnées'), { poidsAbsent = true, note = 3 })
+  local autreVideo = nouvellePhoto(611, ecrire('videos/INCONNUE-2.mp4', 'autre contenu sans dimensions'), { poidsAbsent = true })
+  nouveauCatalogue({ videoSansDetails, autreVideo })
+  catalogue.selection = { videoSansDetails, autreVideo }
+  reponses, boitesPortee = { 'ok' }, {}
+  dofile(PLUGIN .. '/FusionManuelle.lua')
+  verifier('vidéos sans détails : fusion possible', dialogues[#dialogues].titre, 'Fusion manuelle terminée')
+  verifier('vidéos sans détails : extension reconnue sans isVideo SDK', boitesPortee[1].contents[4].items[1].title:find('vidéo', 1, true) ~= nil, true)
+  verifier('vidéos sans détails : résolution inconnue annoncée', boitesPortee[1].contents[4].items[1].title:find('résolution inconnue', 1, true) ~= nil, true)
+  verifier('vidéos sans détails : poids inconnu annoncé', boitesPortee[1].contents[4].items[1].title:find('poids inconnu', 1, true) ~= nil, true)
+  verifier('vidéos sans détails : chemins exclus mémorisés malgré date absente',
+    Historique.contient(Historique.lire(projetVideos .. '/photos-traitees.txt'), autreVideo.chemin), true)
+  _PLUGIN, catalogue, collections, journal = contexteAvant.plugin, contexteAvant.catalogue, contexteAvant.collections, contexteAvant.journal
+  dialogues, reponses, boitesPortee = contexteAvant.dialogues, contexteAvant.reponses, contexteAvant.boitesPortee
+end
+
 -- Les gates du SDK peuvent abandonner l'accès sans lever d'erreur ni appeler le callback.
 local function testerAccesCatalogue()
 local ecrireCatalogue = catalogue.withWriteAccessDo
@@ -1199,6 +1274,71 @@ verifier('Ctrl+Z avant miroir : Rétablir reste effectif',
   Historique.contient(Historique.lire(cheminRefus), 'D:\\Photos\\annulee-avant-miroir.jpg'), true)
 end
 testerAccesCatalogue()
+
+local function testerDetectionVideos()
+  -- Identité de tout le fichier : noms et dates peuvent différer, les albums et notes sont réunis.
+  local contenu = boiteIso('ftyp', 'isom') .. boiteIso('moov', 'temps et pistes') .. boiteIso('mdat', 'VIDEO-IDENTIQUE')
+  local a = nouvellePhoto(600, ecrire('videos/rangee/VIDEO-A.mp4', contenu), { note = 1 })
+  local b = nouvellePhoto(601, ecrire('videos/desordre/RENOMMEE.mov', contenu), { note = 4, date = d1 + 20 })
+  nouveauCatalogue({ a, b })
+  catalogue.selection = { a, b }
+  local album = nouvelleCollection('Album vidéo')
+  album.photos[b] = true
+  reponses, miniaturesVoulues = { 'ok' }, false
+  dofile(PLUGIN .. '/FusionnerDoublons.lua')
+  local corbeille = collections[#collections]
+  verifier('vidéos identiques renommées : fusion effectuée', dialogues[#dialogues].titre, 'Doublons fusionnés')
+  verifier('vidéos identiques renommées : une seule copie écartée', corbeille.photos[a] ~= corbeille.photos[b], true)
+  local gardee, retiree = corbeille.photos[a] and b or a, corbeille.photos[a] and a or b
+  verifier('vidéos : note réunie', gardee.note, 4)
+  verifier('vidéos : album réuni', album.photos[gardee], true)
+  verifier('vidéos : exclusion mémorisée', Historique.contient(Historique.lire(cheminUndo), retiree.chemin), true)
+  catalogue:annuler()
+  Annulation.synchroniser(catalogue, cheminUndo)
+  verifier('vidéos Ctrl+Z : album original restauré', album.photos[b], true)
+  verifier('vidéos Ctrl+Z : exclusion annulée', Historique.contient(Historique.lire(cheminUndo), retiree.chemin), false)
+
+  -- Même mdat et une éventuelle première image identique ne prouvent pas l'identité du montage.
+  local x = nouvellePhoto(610, ecrire('videos/distinctes/CLIP.mov', boiteIso('ftyp', 'qt  ')
+    .. boiteIso('moov', 'montage A') .. boiteIso('mdat', 'MEMES-IMAGES')))
+  local y = nouvellePhoto(611, ecrire('videos/distinctes/CLIP-2.mov', boiteIso('ftyp', 'qt  ')
+    .. boiteIso('moov', 'montage B') .. boiteIso('mdat', 'MEMES-IMAGES')))
+  vignette(x.chemin, uniforme(100), 1920, 1080)
+  vignette(y.chemin, uniforme(100), 1920, 1080)
+  nouveauCatalogue({ x, y })
+  catalogue.selection = { x, y }
+  reponses, miniaturesVoulues = { 'ok' }, false
+  dofile(PLUGIN .. '/FusionnerDoublons.lua')
+  verifier('vidéos : montages différents non fusionnés', catalogue:nombreActions(), 0)
+
+  -- Préfiltre identique : seule l'empreinte intégrale décide, y compris avec des noms différents.
+  local empreinte, complete = Empreintes.empreinte, Empreintes.empreinteComplete
+  local v1 = nouvellePhoto(620, ecrire('videos/grosses/ORIGINAL.mp4', 'A'))
+  local v2 = nouvellePhoto(621, ecrire('videos/grosses/COPIE.mov', 'A'))
+  local v3 = nouvellePhoto(622, ecrire('videos/grosses/AUTRE.mp4', 'B'))
+  local unique = nouvellePhoto(623, ecrire('videos/grosses/UNIQUE.mp4', 'C'))
+  local lectures = {}
+  Empreintes.empreinte = function(chemin)
+    return chemin == unique.chemin and 'gros:unique' or 'gros:debut-et-fin-identiques'
+  end
+  Empreintes.empreinteComplete = function(chemin)
+    lectures[chemin] = (lectures[chemin] or 0) + 1
+    return chemin == v3.chemin and 'complet:B' or 'complet:A'
+  end
+  nouveauCatalogue({ v1, v2, v3, unique })
+  catalogue.selection = { v1, v2, v3, unique }
+  reponses = { 'ok' }
+  dofile(PLUGIN .. '/FusionnerDoublons.lua')
+  Empreintes.empreinte, Empreintes.empreinteComplete = empreinte, complete
+  corbeille = collections[#collections]
+  verifier('grosses vidéos : candidats vérifiés intégralement', lectures[v1.chemin] == 1 and lectures[v2.chemin] == 1
+    and lectures[v3.chemin] == 1, true)
+  verifier('grosses vidéos : fichier sans candidat non relu', lectures[unique.chemin], nil)
+  verifier('grosses vidéos : seule une copie identique écartée', corbeille.photos[v1] ~= corbeille.photos[v2], true)
+  verifier('grosses vidéos : milieu différent conservé', corbeille.photos[v3], nil)
+  verifier('grosses vidéos : fichier unique conservé', corbeille.photos[unique], nil)
+end
+testerDetectionVideos()
 
 print(string.format('%d vérifications, %d échecs', nb, echecs))
 os.exit(echecs == 0 and 0 or 1)

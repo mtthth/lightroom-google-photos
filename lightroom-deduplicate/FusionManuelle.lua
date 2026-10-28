@@ -1,4 +1,4 @@
--- Fusionne en un seul groupe les photos explicitement sélectionnées par l'utilisateur.
+-- Fusionne en un seul groupe les photos ou vidéos explicitement sélectionnées par l'utilisateur.
 -- Contrairement à « Fusionner les doublons », cette commande ne cherche pas à reconnaître les images :
 -- la sélection elle-même désigne le groupe à fusionner.
 
@@ -14,6 +14,7 @@ local LrView = import 'LrView'
 local Catalogue = require 'Catalogue'
 local Annulation = require 'Annulation'
 local Doublons = require 'Doublons'
+local Empreintes = require 'Empreintes'
 local Epoques = require 'Epoques'
 local Historique = require 'Historique'
 local Noms = require 'Noms'
@@ -45,19 +46,22 @@ end
 
 local function lireCopies(catalogue, photos)
   local brutes = catalogue:batchGetRawMetadata(photos,
-    { 'path', 'fileSize', 'dateTimeOriginal', 'isVirtualCopy', 'masterPhoto', 'countVirtualCopies', 'width', 'height', 'dimensions' })
+    { 'path', 'fileSize', 'dateTimeOriginal', 'isVirtualCopy', 'masterPhoto', 'countVirtualCopies',
+      'width', 'height', 'dimensions', 'isVideo', 'fileFormat', 'durationInSeconds' })
   local copies = {}
   for _, photo in ipairs(photos) do
     local b = brutes[photo] or {}
     if not b.path then
-      return nil, 'Au moins une photo sélectionnée n’a pas de chemin de fichier lisible dans le catalogue.'
+      return nil, 'Au moins une photo ou vidéo sélectionnée n’a pas de chemin de fichier lisible dans le catalogue.'
     end
     local dimensions = type(b.dimensions) == 'table' and b.dimensions or {}
     local largeur, hauteur = tonumber(b.width or dimensions.width), tonumber(b.height or dimensions.height)
     copies[#copies + 1] = {
-      photo = photo, id = photo.localIdentifier, chemin = b.path, taille = b.fileSize or 0,
+      photo = photo, id = photo.localIdentifier, chemin = b.path, taille = b.fileSize,
       octets = b.fileSize or 0, date = b.dateTimeOriginal, virtuelles = b.countVirtualCopies or 0,
       virtuelle = b.isVirtualCopy or false, maitre = b.masterPhoto,
+      video = b.isVideo or b.fileFormat == 'VIDEO' or Empreintes.estVideo(b.path),
+      duree = tonumber(b.durationInSeconds),
       collections = {}, motsCles = {}, textes = {}, note = 0, drapeau = 0,
       largeur = largeur, hauteur = hauteur,
       pixels = largeur and hauteur and largeur > 0 and hauteur > 0 and largeur * hauteur or nil,
@@ -109,8 +113,11 @@ local function completerDetails(catalogue, copies, progression)
 end
 
 local function decrireCopie(c)
-  return (c.pixels and string.format('%d × %d px', c.largeur, c.hauteur) or 'résolution inconnue')
-    .. string.format(' · %d étoile(s) · %.2f Mo', c.note or 0, c.taille / 1024 / 1024)
+  return (c.video and 'vidéo · ' or '')
+    .. (c.pixels and string.format('%d × %d px', c.largeur, c.hauteur) or 'résolution inconnue')
+    .. (c.video and c.duree and string.format(' · %.1f s', c.duree) or '')
+    .. string.format(' · %d étoile(s)', c.note or 0)
+    .. (c.taille and string.format(' · %.2f Mo', c.taille / 1024 / 1024) or ' · poids inconnu')
     .. (c.virtuelle and (' · copie virtuelle' .. (c.nomCopie ~= '' and (' « ' .. c.nomCopie .. ' »') or '')) or '')
 end
 
@@ -154,8 +161,8 @@ local function choisirGardee(contexte, copies, parResolution)
       bind_to_object = proprietes,
       spacing = f:control_spacing(),
       f:static_text {
-        title = string.format('%d photos sélectionnées seront traitées comme un seul groupe, sans comparaison '
-          .. 'de leur contenu. Choisis celle qui récupère les albums et métadonnées. Les autres quitteront leurs '
+        title = string.format('%d photos ou vidéos sélectionnées seront traitées comme un seul groupe, sans comparaison '
+          .. 'de leur contenu. Choisis la copie qui récupère les albums et métadonnées. Les autres quitteront leurs '
           .. 'collections ordinaires et seront placées dans « %s ». Elles restent dans le catalogue jusqu’à leur retrait manuel.',
           #copies, COLLECTION_DOUBLONS),
         width = 560, height_in_lines = 5,
@@ -166,7 +173,7 @@ local function choisirGardee(contexte, copies, parResolution)
           or 'Résolution incomplète : proposition selon la note puis le nom ; le poids départage les égalités.',
         width = 560, height_in_lines = 2,
       },
-      f:static_text { title = 'Photo à garder (la proposition est présélectionnée) :' },
+      f:static_text { title = 'Copie à garder (la proposition est présélectionnée) :' },
       f:popup_menu { value = LrView.bind('gardee'), items = choix, width_in_chars = 72 },
       f:static_text {
         title = avecOriginalSelectionne
@@ -207,6 +214,10 @@ end
 local function avertissementsRetirees(decision)
   local avertissements = {}
   for _, c in ipairs(decision.retirees) do
+    if c.video then
+      avertissements[#avertissements + 1] = nomFichier(c.chemin)
+        .. ' est une vidéo : ses coupes et réglages vidéo ne seront pas transférés'
+    end
     if c.retouchee then avertissements[#avertissements + 1] = nomFichier(c.chemin) .. ' est retouchée dans Lightroom' end
     if c.virtuelle then avertissements[#avertissements + 1] = nomFichier(c.chemin) .. ' est une copie virtuelle' end
     if c.virtuelles > 0 then avertissements[#avertissements + 1] = nomFichier(c.chemin) .. ' a des copies virtuelles' end
@@ -226,7 +237,7 @@ local function appliquer(catalogue, decision)
     end
   end
   local corbeille
-  local historiqueOk, erreurHistorique = Annulation.action(catalogue, HISTORIQUE, 'Fusion manuelle de photos',
+  local historiqueOk, erreurHistorique = Annulation.action(catalogue, HISTORIQUE, 'Fusion manuelle de photos et vidéos',
     { retablir = { decision.garde.chemin }, type = 'doublon', photos = photos }, function()
     corbeille = catalogue:createCollection(COLLECTION_DOUBLONS, nil, true)
     local e, garde = decision.effets, decision.garde.photo
@@ -245,11 +256,11 @@ local function appliquer(catalogue, decision)
   end)
   for _, col in ipairs(decision.garde.photo:getContainedCollections()) do
     if CORBEILLES[col:getName()] then
-      error('La photo gardée est encore dans « ' .. col:getName() .. ' ». Ne retire aucune photo du catalogue.', 0)
+      error('La copie gardée est encore dans « ' .. col:getName() .. ' ». Ne retire aucune photo ou vidéo du catalogue.', 0)
     end
   end
   if historiqueOk and Historique.contient(Historique.lire(HISTORIQUE), decision.garde.chemin) then
-    error('La photo gardée reste exclue dans l’historique. Ne retire aucune photo du catalogue.', 0)
+    error('La copie gardée reste exclue dans l’historique. Ne retire aucune photo ou vidéo du catalogue.', 0)
   end
   return historiqueOk, erreurHistorique
 end
@@ -261,7 +272,7 @@ LrTasks.startAsyncTask(function()
       local catalogue = LrApplication.activeCatalog()
       local photos = selection(catalogue)
       if #photos < 2 then
-        LrDialogs.message('Fusion manuelle', 'Sélectionne au moins deux photos dans la grille ou la pellicule.', 'info')
+        LrDialogs.message('Fusion manuelle', 'Sélectionne au moins deux photos ou vidéos dans la grille ou la pellicule.', 'info')
         return
       end
 
@@ -288,27 +299,27 @@ LrTasks.startAsyncTask(function()
       end
       local texteDestination = decrireCollections(decision)
       if #decision.effets.corbeillesGardee > 0 then
-        texteDestination = texteDestination .. '\n\nLa photo gardée sera sortie des collections « à retirer » où elle se trouve déjà.'
+        texteDestination = texteDestination .. '\n\nLa copie gardée sera sortie des collections « à retirer » où elle se trouve déjà.'
       end
-      local messageConfirmation = 'Photo gardée :\n' .. garde.chemin .. '\n' .. decrireCopie(garde)
-        .. '\n\n' .. texteDestination .. '\n\nPhotos qui seront mises dans « '
+      local messageConfirmation = 'Copie gardée :\n' .. garde.chemin .. '\n' .. decrireCopie(garde)
+        .. '\n\n' .. texteDestination .. '\n\nCopies qui seront mises dans « '
         .. COLLECTION_DOUBLONS .. ' » :\n' .. table.concat(lignes, '\n')
         .. '\n\nMétadonnées : note la plus haute, mots-clés réunis, drapeau retenu prioritaire sur rejeté ; '
-        .. 'textes et GPS de la photo gardée conservés, champs vides complétés avec les autres copies.'
+        .. 'textes et GPS de la copie gardée conservés, champs vides complétés avec les autres copies.'
         .. '\nLes fichiers retirés seront mémorisés dans photos-traitees.txt.'
       if #avertissements > 0 then
         messageConfirmation = messageConfirmation .. '\n\nÉléments non transférés :\n• '
           .. table.concat(avertissements, '\n• ')
-          .. '\nLes réglages de développement, les copies virtuelles et les appartenances publiées restent sur les '
+          .. '\nLes coupes et réglages vidéo, les réglages de développement, les copies virtuelles et les appartenances publiées restent sur les '
           .. 'copies écartées tant qu’elles sont au catalogue. Leur retrait ultérieur fera perdre ces éléments.'
       end
       if LrDialogs.confirm('Confirmer la fusion manuelle ?', messageConfirmation, 'Fusionner de force', 'Annuler') ~= 'ok' then return end
 
       etape = 'préparation de l’historique et fusion annulable'
       local historiqueOk, erreurHistorique = appliquer(catalogue, decision)
-      local bilan = string.format('%d photos fusionnées. Photo gardée :\n%s\n\n%s\n\nLes %d autres sont dans « %s ».',
+      local bilan = string.format('%d photos ou vidéos fusionnées. Copie gardée :\n%s\n\n%s\n\nLes %d autres sont dans « %s ».',
         #copies, garde.chemin, texteDestination, #retirees, COLLECTION_DOUBLONS)
-        .. '\nLa photo gardée a été vérifiée hors des collections de retrait. Les copies écartées restent visibles '
+        .. '\nLa copie gardée a été vérifiée hors des collections de retrait. Les copies écartées restent visibles '
         .. 'dans les dossiers tant qu’elles ne sont pas retirées du catalogue.'
         .. '\nCtrl+Z annule cette fusion complète, y compris l’historique des exclusions.'
       if historiqueOk then

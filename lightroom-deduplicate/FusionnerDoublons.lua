@@ -5,6 +5,7 @@
 --    grille (dossier, collection…). Une copie n'est trouvée que si ses doublons sont dans cette portée.
 -- 1. Empreinte exacte de chaque photo de la portée (voir Empreintes.lua) : deux contenus identiques
 --    sont regroupés même si leurs noms ou leurs dates diffèrent.
+--    Vidéos incluses : identité du fichier entier, vérifiée intégralement pour les gros candidats.
 -- 2. Pour les photos dont l'empreinte diffère, recherche de variantes de même nom d'origine
 --    (suffixes « -2 », « (2) », « -Modifier », « _filtered », DxO…) et de même date de prise de vue.
 -- 3. Ces variantes sont comparées par une miniature 16 × 16 (ImageMagick, voir Vignettes.lua et
@@ -98,12 +99,14 @@ local function demanderPortee(contexte, portee, magickDispo)
       .. 'affichées%s.', nombre(nb), portee.nom and (' (« ' .. portee.nom .. ' »)') or '')
   end
   local texte = description .. '\n\nUne copie n’est trouvée que si ses doublons sont aussi dans ces photos. '
+    .. 'Les vidéos sont incluses : seules les copies de fichiers identiques sont fusionnées automatiquement. '
+    .. 'Pour une version convertie ou recompressée, utilise la fusion de force. '
     .. 'Rien n’est modifié avant que tu aies vu le rapport et confirmé.'
   if nb > GRANDE_PORTEE then
     texte = texte .. '\n\nC’est beaucoup de photos : l’analyse peut durer plusieurs minutes.'
   end
   local colonne = { bind_to_object = proprietes, spacing = f:control_spacing() }
-  colonne[#colonne + 1] = f:static_text { title = texte, width = 480, height_in_lines = nb > GRANDE_PORTEE and 6 or 4 }
+  colonne[#colonne + 1] = f:static_text { title = texte, width = 480, height_in_lines = nb > GRANDE_PORTEE and 9 or 7 }
   colonne[#colonne + 1] = f:checkbox {
     title = magickDispo and 'Miniatures dans le rapport HTML (un peu plus long)'
       or 'Miniatures dans le rapport HTML (ImageMagick est introuvable)',
@@ -124,13 +127,14 @@ local function lireCopies(catalogue, photos, progression, historique)
     if progression:isCanceled() then return false end
     progression:setCaption(string.format('Lecture des photos : %d / %d', fin, #photos))
     local brutes = catalogue:batchGetRawMetadata(lot,
-      { 'path', 'fileSize', 'dateTimeOriginal', 'isVirtualCopy', 'countVirtualCopies' })
+      { 'path', 'fileSize', 'dateTimeOriginal', 'isVirtualCopy', 'countVirtualCopies', 'isVideo', 'fileFormat' })
     for _, photo in ipairs(lot) do
       local b = brutes[photo] or {}
       if not b.isVirtualCopy and b.path and b.fileSize and not Historique.contient(historique, b.path) then
         copies[#copies + 1] = {
           photo = photo, id = photo.localIdentifier, chemin = b.path, taille = b.fileSize,
           date = b.dateTimeOriginal, virtuelles = b.countVirtualCopies or 0,
+          video = b.isVideo or b.fileFormat == 'VIDEO' or Empreintes.estVideo(b.path),
         }
       end
     end
@@ -186,11 +190,8 @@ local function chercherGroupes(copies, progression)
     local cleChemin = c.chemin:gsub('/', '\\'):lower()
     local empreinte = empreintesParChemin[cleChemin]
     if empreinte == nil then
-      local ok, resultat = LrTasks.pcall(Empreintes.empreinte, c.chemin)
+      local ok, resultat = LrTasks.pcall(Empreintes.empreinte, c.chemin, c.video)
       empreinte = ok and resultat or false
-      -- Les empreintes « gros » ne sont qu'un échantillon début/fin. On ne les prend pas pour
-      -- une preuve d'identité entre chemins différents.
-      if empreinte and empreinte:match('^gros:') then empreinte = empreinte .. '|' .. cleChemin end
       empreintesParChemin[cleChemin] = empreinte
     end
     c.empreinte = empreinte ~= false and empreinte or nil
@@ -198,7 +199,40 @@ local function chercherGroupes(copies, progression)
     LrTasks.yield()
   end
 
+  -- Le début et la fin servent seulement de préfiltre pour les gros fichiers. Deux vidéos peuvent
+  -- partager ces morceaux et différer au milieu : lire tous les octets des seuls candidats.
+  local gros = Doublons.grouper(copies, function(c)
+    return c.empreinte and c.empreinte:match('^gros:') and c.empreinte or nil
+  end)
+  local completes, total, fait = {}, 0, 0
+  for _, groupe in ipairs(gros) do total = total + #groupe end
+  for _, groupe in ipairs(gros) do
+    for _, c in ipairs(groupe) do
+      if progression:isCanceled() then return nil end
+      fait = fait + 1
+      progression:setCaption(string.format('Vérification complète des gros fichiers : %d / %d', fait, total))
+      progression:setPortionComplete(fait, total)
+      local cleChemin = c.chemin:gsub('/', '\\'):lower()
+      if completes[cleChemin] == nil then
+        local ok, resultat = LrTasks.pcall(Empreintes.empreinteComplete, c.chemin,
+          function() return progression:isCanceled() end)
+        completes[cleChemin] = ok and resultat or false
+      end
+      if progression:isCanceled() then return nil end
+      c.empreinte = completes[cleChemin] or nil
+      if not c.empreinte then illisibles = illisibles + 1 end
+    end
+  end
+  -- Un préfiltre resté seul n'est jamais une preuve d'identité entre deux chemins.
+  for _, c in ipairs(copies) do
+    if c.empreinte and c.empreinte:match('^gros:') then
+      c.empreinte = c.empreinte .. '|' .. c.chemin:gsub('/', '\\'):lower()
+    end
+  end
+
   local candidats = Doublons.grouper(copies, function(c)
+    -- Une image du clip ne suffit pas à comparer sa durée, ses autres images et sa bande-son.
+    if c.video then return nil end
     local extension = (c.chemin:match('%.([^%./\\]*)$') or ''):lower()
     return Doublons.nomDeBase(c.chemin) .. '.' .. extension .. '|'
       .. (c.date and string.format('%d', math.floor(c.date)) or '')
