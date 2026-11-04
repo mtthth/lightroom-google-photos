@@ -30,7 +30,7 @@ function lancer(nom, executable, args) {
 }
 
 // Les suites JavaScript restent exécutables sans MiKTeX.
-for (const nom of ['rafales_node', 'export_albums']) {
+for (const nom of ['rafales_node', 'export_albums', 'convertir_videos', 'telecharger_manquantes']) {
   lancer(nom, process.execPath, [path.join(dossierTests, `test_${nom}.mjs`)]);
 }
 

@@ -60,11 +60,13 @@ class Telechargeur {
   #navigateur;
   #entrees = new Map();   // identifiant de l'onglet → { promesse, resolve, reject, guid }
   #cibleParGuid = new Map();
+  #ferme = false;
 
   static async creer(dossier) {
     const t = new Telechargeur();
     t.#navigateur = await connecterNavigateur();
     t.#navigateur.sur('Browser.downloadWillBegin', ({ frameId, guid, suggestedFilename }) => {
+      if (t.#ferme) return;
       t.#entree(frameId).guid = guid;
       t.#entree(frameId).nom = suggestedFilename;
       t.#cibleParGuid.set(guid, frameId);
@@ -74,11 +76,16 @@ class Telechargeur {
       if (state === 'completed') entree?.resolve(filePath);
       else if (state === 'canceled') entree?.reject(new Error('téléchargement annulé par Chrome'));
     });
-    await t.#navigateur.envoyer('Browser.setDownloadBehavior', {
-      behavior: 'allowAndName',   // Chrome nomme le fichier d'après un identifiant : jamais d'écrasement
-      downloadPath: path.resolve(dossier),
-      eventsEnabled: true,
-    });
+    try {
+      await t.#navigateur.envoyer('Browser.setDownloadBehavior', {
+        behavior: 'allowAndName',   // Chrome nomme le fichier d'après un identifiant : jamais d'écrasement
+        downloadPath: path.resolve(dossier),
+        eventsEnabled: true,
+      });
+    } catch (erreur) {
+      t.fermer();
+      throw erreur;
+    }
     return t;
   }
 
@@ -96,7 +103,9 @@ class Telechargeur {
 
   // Renvoie { chemin, nom } : le fichier téléchargé (nom provisoire) et le nom que Google lui donne.
   async telecharger(url) {
+    if (this.#ferme) throw new Error('téléchargements arrêtés');
     const { targetId } = await this.#navigateur.envoyer('Target.createTarget', { url });
+    if (this.#ferme) throw new Error('téléchargements arrêtés');
     const entree = this.#entree(targetId);
     const minuteurs = [
       setTimeout(() => { if (!entree.guid) entree.reject(new Error("Chrome n'a pas lancé le téléchargement (adresse refusée ?)")); }, 30_000),
@@ -114,6 +123,9 @@ class Telechargeur {
   }
 
   fermer() {
+    if (this.#ferme) return;
+    this.#ferme = true;
+    for (const entree of this.#entrees.values()) entree.reject(new Error('téléchargements arrêtés'));
     this.#navigateur.fermer();
   }
 }
@@ -255,34 +267,45 @@ async function main() {
 
   if (aTelecharger.length > 0) {
     const lanceParLeScript = await demarrerChrome();
+    let cdp, telechargeur, connexionsFermees = false;
+    const fermerConnexions = () => {
+      if (connexionsFermees) return;
+      connexionsFermees = true;
+      try { telechargeur?.fermer(); } finally { cdp?.fermer(); }
+    };
     try {
       const onglet = await attendreOngletPhotos();
-      const cdp = await Cdp.connecter(onglet.webSocketDebuggerUrl);
-      const telechargeur = await Telechargeur.creer(dossier);
+      cdp = await Cdp.connecter(onglet.webSocketDebuggerUrl);
+      telechargeur = await Telechargeur.creer(dossier);
       console.log('Connecté à Google Photos. Les téléchargements commencent dès que les premières adresses sont trouvées.');
 
       // Les adresses sont cherchées par lots ; les téléchargements démarrent sans attendre la fin.
       const file = [];
       let rechercheTerminee = false;
+      let arret = false;
       let adressesTrouvees = 0;
       let faits = 0;
       const debut = Date.now();
 
       const chercher = async () => {
-        for (let i = 0; i < aTelecharger.length; i += TAILLE_LOT_ADRESSES) {
-          const lot = aTelecharger.slice(i, i + TAILLE_LOT_ADRESSES);
-          const adresses = await evaluerDansPage(
-            cdp, adressesTelechargement,
-            lot.map((l) => ({ id: l.id, video: EXTENSIONS_VIDEO.test(l.fichier) })),
-          );
-          lot.forEach((ligne, k) => file.push({ ligne, adresse: adresses[k] }));
-          adressesTrouvees += lot.length;
+        try {
+          for (let i = 0; i < aTelecharger.length && !arret; i += TAILLE_LOT_ADRESSES) {
+            const lot = aTelecharger.slice(i, i + TAILLE_LOT_ADRESSES);
+            const adresses = await evaluerDansPage(
+              cdp, adressesTelechargement,
+              lot.map((l) => ({ id: l.id, video: EXTENSIONS_VIDEO.test(l.fichier) })),
+            );
+            if (arret) return;
+            lot.forEach((ligne, k) => file.push({ ligne, adresse: adresses[k] }));
+            adressesTrouvees += lot.length;
+          }
+        } finally {
+          rechercheTerminee = true;
         }
-        rechercheTerminee = true;
       };
 
       const telecharger = async () => {
-        for (;;) {
+        while (!arret) {
           const element = file.shift();
           if (!element) {
             if (rechercheTerminee) return;
@@ -308,12 +331,23 @@ async function main() {
         }
       };
 
-      await Promise.all([chercher(), ...Array.from({ length: TELECHARGEMENTS_SIMULTANES }, telecharger)]);
-      telechargeur.fermer();
-      cdp.fermer();
+      const taches = [chercher(), ...Array.from({ length: TELECHARGEMENTS_SIMULTANES }, telecharger)];
+      try {
+        await Promise.all(taches);
+      } catch (erreur) {
+        arret = true;
+        // Fermer rejette aussi les téléchargements en cours et les appels CDP en attente.
+        fermerConnexions();
+        await Promise.allSettled(taches);
+        throw erreur;
+      }
     } finally {
-      ecrireManifeste();
-      if (lanceParLeScript) await fermerChrome();
+      try {
+        fermerConnexions();
+        ecrireManifeste();
+      } finally {
+        if (lanceParLeScript) await fermerChrome();
+      }
     }
   }
 

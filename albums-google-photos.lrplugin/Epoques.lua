@@ -115,7 +115,8 @@ function M.calculer(albums, catalogue, dureeMax)
   end
   table.sort(retenus, function(a, b)
     if a.debut ~= b.debut then return a.debut < b.debut end
-    return a.titre < b.titre
+    if a.titre ~= b.titre then return a.titre < b.titre end
+    return (a.cle or '') < (b.cle or '')
   end)
 
   local epoques = {}

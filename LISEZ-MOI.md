@@ -34,6 +34,10 @@ Rien n'est refait : chaque étape ne traite que les nouveautés.
    Seuls les albums nouveaux ou modifiés (renommés, photos ajoutées ou retirées) sont relus ; les autres sont repris
    du fichier précédent. Résultat : `albums-tous.csv` et `photos-albums-tous.csv`.
 
+   Une réponse Google invalide, une pagination répétée ou un nombre de photos incohérent arrête l'export
+   avant de remplacer les fichiers précédents. Relance le script pour réessayer. Les anciens exports dont
+   le compte ne correspond pas à leur signature Google sont automatiquement relus en entier.
+
    Le script liste aussi toute la bibliothèque (une ou deux minutes pour environ 70 000 photos) et en déduit les
    photos qui ne sont dans aucun album (`photos-hors-album.csv`). Une photo est « dans un album » si son identifiant
    ou l'empreinte de son contenu figure dans un album, ce qui couvre les photos partagées, dont l'identifiant change
@@ -112,7 +116,7 @@ Depuis mars 2025, l'API ne permet de compléter que les albums créés par l'app
 ## Tests
 
 ```
-node tests/lancer.mjs             # quatre suites Lua et deux suites JavaScript
+node tests/lancer.mjs             # quatre suites Lua et quatre suites JavaScript
 node tests/lancer.mjs --js        # JavaScript seul, sans MiKTeX
 node tests/lancer.mjs --mutants   # puis vérifie quatre régressions de recréation des albums
 ```
@@ -123,6 +127,7 @@ ni tes exports personnels. Les suites Lua vérifient la recréation des albums, 
 les empreintes de fichiers, le service d’export et le JSON. Les tests JavaScript vérifient les règles du rapport
 des rafales à blanc et la reprise des exports incrémentaux. Les tests de Deduplicate se lancent depuis son
 propre dépôt ; aucun checkout de Deduplicate n’est nécessaire pour tester Google Photos.
+Les suites JavaScript couvrent aussi la reprise des conversions vidéo et l'arrêt des téléchargements sur erreur.
 
 ## À savoir
 
@@ -143,8 +148,18 @@ propre dépôt ; aucun checkout de Deduplicate n’est nécessaire pour tester G
   ne créent ni époque ni période intercalaire. La limite est la constante `DUREE_MAX_EPOQUE_JOURS` en haut de
   `albums-google-photos.lrplugin\RecreerAlbums.lua` (`nil` pour aucune limite).
 - **Deux albums de même titre** portent le même nom de collection : le second est suffixé « (2) ».
+  Ils sont distingués par leur identifiant Google (les anciens CSV sans identifiant restent lisibles).
+  Si une ancienne version a déjà mélangé leurs photos, supprime les collections concernées puis relance le
+  module pour les recréer : la mise à jour complète les collections existantes sans en retirer les photos.
 - Les noms de collection ne peuvent pas contenir certains caractères : le module les remplace par « - » si
-  Lightroom refuse le titre.
+  Lightroom refuse le titre. Si plusieurs titres deviennent identiques après ce remplacement, un suffixe
+  « (2) », « (3) »… les distingue dans les albums comme dans les époques.
+- **Conversions vidéo** : `convertir-videos.mjs` conserve dans le dossier de sortie un fichier `conversions.json`
+  qui associe chaque source à sa vidéo convertie. Garde ce fichier pour reprendre les conversions, même si le
+  journal change d'ordre ou ne contient plus qu'une partie des sources. Une ancienne sortie sans correspondance
+  est conservée ; la nouvelle conversion prend un nom suffixé.
+- **Rapport de rafales à blanc** : les dossiers et les séries de noms de fichiers sont traités séparément.
+  `IMG_0123` et `DSCF0123` restent deux cadres, même s'ils ont été pris à la même seconde.
 - Les requêtes de Google Photos utilisées ne sont pas documentées : si Google modifie son site, `export-albums.mjs`
   et `telecharger-manquantes.mjs` peuvent cesser de fonctionner et devront être adaptés.
 

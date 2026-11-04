@@ -151,8 +151,19 @@ local function photoIdentique(index, chemin)
   if #candidats == 0 then return nil end
   local empreinte = Empreintes.empreinte(chemin)
   if not empreinte then return nil end
+  local complete, vus = nil, {}
   for _, c in ipairs(candidats) do
-    if c.chemin ~= chemin and Empreintes.empreinte(c.chemin) == empreinte then return c.photo end
+    if c.chemin ~= chemin and not vus[c.chemin] then
+      vus[c.chemin] = true
+      if Empreintes.empreinte(c.chemin) == empreinte then
+        -- « gros: » ne compare que le début et la fin : confirmer tous les octets avant de
+        -- réutiliser une photo. Une lecture impossible ne prouve jamais l'identité.
+        if empreinte:sub(1, 5) ~= 'gros:' then return c.photo end
+        complete = complete or Empreintes.empreinteComplete(chemin)
+        if not complete then return nil end
+        if Empreintes.empreinteComplete(c.chemin) == complete then return c.photo end
+      end
+    end
   end
   return nil
 end
@@ -165,33 +176,36 @@ local function ensembleAnnee(catalogue, racine, cache, annee)
   return cache[annee]
 end
 
--- Nom unique dans une année : Lightroom ne distingue pas majuscules et minuscules, et deux
--- albums de même titre le même jour porteraient le même nom.
-local function nomUnique(pris, annee, nom)
-  local candidat, n = nom, 1
-  while pris[annee .. '|' .. candidat:lower()] do
-    n = n + 1
-    candidat = nom .. ' (' .. n .. ')'
-  end
-  pris[annee .. '|' .. candidat:lower()] = true
-  return candidat
-end
-
 -- Crée (ou retrouve) une collection. Lightroom peut refuser certains titres (caractères comme
 -- « / » ou « : ») en renvoyant nil : on réessaie alors sans ces caractères. Renvoie la collection,
 -- ou nil après avoir signalé le problème.
-local function creerCollection(catalogue, nom, ensemble, problemes)
+local function creerCollection(catalogue, nom, ensemble, problemes, pris)
   local contreOblique = string.char(92)
   local variantes = {
     nom,
     (nom:gsub('[/' .. contreOblique .. ']', '-')),
     (nom:gsub('[/' .. contreOblique .. ':]', '-')),
   }
+  local parent = ensemble or false
+  pris[parent] = pris[parent] or {}
+  local nomsPris, essayees = pris[parent], {}
   local dernier
   for _, variante in ipairs(variantes) do
-    local ok, resultat = LrTasks.pcall(function() return catalogue:createCollection(variante, ensemble, true) end)
-    if ok and resultat then return resultat end
-    dernier = ok and 'refusé par Lightroom' or tostring(resultat)
+    if not essayees[variante] then
+      essayees[variante] = true
+      local candidat, n = variante, 1
+      while nomsPris[candidat:lower()] do
+        n = n + 1
+        candidat = variante .. ' (' .. n .. ')'
+      end
+      local ok, resultat = LrTasks.pcall(function() return catalogue:createCollection(candidat, ensemble, true) end)
+      if ok and resultat then
+        -- Réserver le nom réellement accepté, après nettoyage et sans distinction de casse.
+        nomsPris[candidat:lower()] = true
+        return resultat
+      end
+      dernier = ok and 'refusé par Lightroom' or tostring(resultat)
+    end
   end
   problemes.nb = problemes.nb + 1
   if #problemes.exemples < 5 then
@@ -365,18 +379,23 @@ LrTasks.startAsyncTask(function()
       local ligne = lignes[i]
       local titreCsv = trim(ligne[1] or '')
       local titre = titreCsv
-      local horsAlbum = titreCsv == TITRE_HORS_ALBUM
+      local idAlbum = ligne[5]
+      local horsAlbum = titreCsv == TITRE_HORS_ALBUM and (not idAlbum or idAlbum == '' or idAlbum == 'hors-album')
       if horsAlbum then
         -- Un « album » par année : (hors album) 2019, (hors album) 2020…
         local annee = (ligne[3] or ''):match('^(%d%d%d%d)')
         titre = TITRE_HORS_ALBUM .. ' ' .. (annee or 'Sans date')
       end
       if titre ~= '' then
-        if not albums[titre] then
-          albums[titre] = { photos = {}, dejaVues = {}, titre = titre, horsAlbum = horsAlbum }
-          table.insert(ordre, titre)
+        -- Le titre n'identifie pas un album Google. Garder une clé distincte pour les anciens
+        -- CSV sans id_album et pour les collections synthétiques « hors album » par année.
+        local cleAlbum = horsAlbum and ('hors\0' .. titre)
+          or (idAlbum and idAlbum ~= '' and ('id\0' .. idAlbum) or ('titre\0' .. titre))
+        if not albums[cleAlbum] then
+          albums[cleAlbum] = { photos = {}, dejaVues = {}, titre = titre, cle = cleAlbum, horsAlbum = horsAlbum }
+          table.insert(ordre, cleAlbum)
         end
-        local album = albums[titre]
+        local album = albums[cleAlbum]
         local secondes = Epoques.secondes(ligne[3])
         if secondes then
           if not album.debut or secondes < album.debut then album.debut = secondes end
@@ -403,7 +422,7 @@ LrTasks.startAsyncTask(function()
           -- titreCsv : le titre tel qu'il est dans le CSV, pour le manifeste et le rapport.
           local okHistorique, photoTraitee = LrTasks.pcall(Correspondance.retrouver, index.traitees, ligne[2], ligne[3])
           table.insert(manquantes, {
-            titre = titre, titreCsv = titreCsv, fichier = ligne[2] or '', date = ligne[3] or '',
+            cleAlbum = cleAlbum, titreCsv = titreCsv, fichier = ligne[2] or '', date = ligne[3] or '',
             historique = okHistorique and photoTraitee ~= nil,
           })
         end
@@ -420,7 +439,7 @@ LrTasks.startAsyncTask(function()
     local encore = {}
     for _, m in ipairs(manquantes) do
       local ok, photo = LrTasks.pcall(retrouverParHeure, index, decalage, m.date, m.fichier)
-      local album = albums[m.titre]
+      local album = albums[m.cleAlbum]
       if ok and photo then
         if not album.dejaVues[photo] then
           album.dejaVues[photo] = true
@@ -487,7 +506,7 @@ LrTasks.startAsyncTask(function()
 
     for i, m in ipairs(manquantes) do
       local photo = fichiersParLigne[i] and importees[fichiersParLigne[i]]
-      local album = albums[m.titre]
+      local album = albums[m.cleAlbum]
       if photo then
         if not album.dejaVues[photo] then
           album.dejaVues[photo] = true
@@ -501,27 +520,31 @@ LrTasks.startAsyncTask(function()
 
     etape = 'création des collections'
     progression:setCaption('Création des collections…')
+    -- Un ordre indépendant du CSV attache les suffixes des homonymes au même identifiant.
+    table.sort(ordre, function(a, b)
+      if albums[a].titre ~= albums[b].titre then return albums[a].titre < albums[b].titre end
+      return a < b
+    end)
     -- Nom de chaque album : « AAAA-MM-JJ – titre » dans l'ensemble de son année.
-    for _, titre in ipairs(ordre) do
-      local album = albums[titre]
+    for _, cleAlbum in ipairs(ordre) do
+      local album = albums[cleAlbum]
       if album.horsAlbum then
         -- Collection « (hors album) » dans l'ensemble de l'année.
-        album.nom, album.annee = TITRE_HORS_ALBUM, titre:sub(#TITRE_HORS_ALBUM + 2)
+        album.nom, album.annee = TITRE_HORS_ALBUM, album.titre:sub(#TITRE_HORS_ALBUM + 2)
       else
-        local nom = Noms.analyser(titre, album.debut and Epoques.dateTexte(album.debut))
+        local nom = Noms.analyser(album.titre, album.debut and Epoques.dateTexte(album.debut))
         album.nom, album.annee = nom.nom, nom.annee
       end
     end
     catalogue:withWriteAccessDo('Recréer les albums Google Photos', function()
       local racine = catalogue:createCollectionSet(ENSEMBLE_ALBUMS, nil, true)
       local ensembles, nomsPris = {}, {}
-      for _, titre in ipairs(ordre) do
-        local album = albums[titre]
+      for _, cleAlbum in ipairs(ordre) do
+        local album = albums[cleAlbum]
         -- Pas de collection « (hors album) » vide (année dont aucune photo n'est au catalogue).
         if not (album.horsAlbum and #album.photos == 0) then
           local parent = ensembleAnnee(catalogue, racine, ensembles, album.annee)
-          local nom = nomUnique(nomsPris, album.annee, album.nom)
-          local collection = creerCollection(catalogue, nom, parent, problemes)
+          local collection = creerCollection(catalogue, album.nom, parent, problemes, nomsPris)
           if collection and #album.photos > 0 then collection:addPhotos(album.photos) end
         end
       end
@@ -548,8 +571,8 @@ LrTasks.startAsyncTask(function()
     -- Les photos hors album ne définissent pas d'époque : elles tombent dans celle qui couvre leur
     -- date (toutes les photos du catalogue prises pendant une époque en font partie).
     local listeAlbums = {}
-    for _, titre in ipairs(ordre) do
-      if not albums[titre].horsAlbum then table.insert(listeAlbums, albums[titre]) end
+    for _, cleAlbum in ipairs(ordre) do
+      if not albums[cleAlbum].horsAlbum then table.insert(listeAlbums, albums[cleAlbum]) end
     end
     local dureeMax = DUREE_MAX_EPOQUE_JOURS and DUREE_MAX_EPOQUE_JOURS * 24 * 3600 or nil
     local epoques = Epoques.calculer(listeAlbums, datees, dureeMax)
@@ -558,11 +581,11 @@ LrTasks.startAsyncTask(function()
     progression:setCaption('Création des collections d’époques…')
     catalogue:withWriteAccessDo('Créer les époques Google Photos', function()
       local racine = catalogue:createCollectionSet(ENSEMBLE_EPOQUES, nil, true)
-      local ensembles = {}
+      local ensembles, nomsPris = {}, {}
       for i, epoque in ipairs(epoques) do
         progression:setPortionComplete(i, #epoques)
         local parent = ensembleAnnee(catalogue, racine, ensembles, epoque.annee)
-        local collection = creerCollection(catalogue, epoque.nom, parent, problemes)
+        local collection = creerCollection(catalogue, epoque.nom, parent, problemes, nomsPris)
         if collection and #epoque.photos > 0 then collection:addPhotos(epoque.photos) end
       end
     end, { timeout = 30 })
@@ -577,8 +600,8 @@ LrTasks.startAsyncTask(function()
       message = message .. string.format('\n%d lignes ignorées selon l’historique des traitements.', nbHistorique)
     end
     local nbHorsAlbum = 0
-    for _, titre in ipairs(ordre) do
-      if albums[titre].horsAlbum then nbHorsAlbum = nbHorsAlbum + #albums[titre].photos end
+    for _, cleAlbum in ipairs(ordre) do
+      if albums[cleAlbum].horsAlbum then nbHorsAlbum = nbHorsAlbum + #albums[cleAlbum].photos end
     end
     if nbHorsAlbum > 0 then
       message = message .. string.format('\n%d photos hors album rangées dans les collections « (hors album) » de chaque année.', nbHorsAlbum)

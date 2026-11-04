@@ -36,7 +36,7 @@ local function nouvelleCollection(nom, intelligente)
   function c:removePhotos(liste) for _, p in ipairs(liste) do self.photos[p] = nil end end
   function c:isSmartCollection() return self.intelligente or false end
   function c:getName() return self.nom end
-  function c:getParent() return nil end
+  function c:getParent() return self.parent end
   function c:getPhotos() local r = {} for p in pairs(self.photos) do r[#r + 1] = p end table.sort(r, function(a, b) return a.localIdentifier < b.localIdentifier end) return r end
   collections[#collections + 1] = c
   return c
@@ -95,6 +95,13 @@ local mocks = {
   LrShell = { revealInShell = function(p) journal[#journal + 1] = 'révéler ' .. p end },
   LrTasks = { pcall = pcall, yield = function() end, startAsyncTask = function(f) f() end, sleep = function() end },
   LrMD5 = { digest = function(s) return 'md5[' .. s .. ']' end },
+  LrDigest = { SHA256 = { init = function()
+    local sha2, blocs = require 'sha2', {}
+    return {
+      update = function(_, bloc) blocs[#blocs + 1] = sha2.digest256(bloc) end,
+      digest = function() return sha2.digest256(table.concat(blocs)) end,
+    }
+  end } },
   LrDate = { currentTime = function() return 0 end, timeToUserFormat = function() return '2026-10-27 14:05' end },
   LrFileUtils = {
     exists = function(p) local f = io.open(p, 'rb'); if f then f:close(); return 'file' end return false end,
@@ -154,7 +161,7 @@ end
 local function nouveauCatalogue(photos)
   collections = {}
   journal, dialogues = {}, {}
-  catalogue = { photos = photos }
+  catalogue = { photos = photos, ensembles = {} }
   function catalogue:getAllPhotos() return self.photos end
   -- Sélection : liste de photos (nil = rien de sélectionné). Comme dans Lightroom, getTargetPhotos renvoie
   -- toute la grille quand rien n'est sélectionné, et getMultipleSelectedOrAllPhotos toute la grille tant
@@ -196,15 +203,23 @@ local function nouveauCatalogue(photos)
     ecriture = true; local ok, erreur = pcall(f); ecriture = false
     if not ok then error(erreur, 0) end
   end
-  function catalogue:createCollection(nom)
+  function catalogue:createCollection(nom, parent)
     assert(ecriture, 'createCollection hors écriture')
-    for _, c in ipairs(collections) do if c.nom == nom then return c end end
-    return nouvelleCollection(nom)
+    if self.refuserCaracteres and nom:find('[:/\\]') then return nil end
+    for _, c in ipairs(collections) do if c.nom:lower() == nom:lower() and c.parent == parent then return c end end
+    local c = nouvelleCollection(nom)
+    c.parent = parent
+    return c
   end
-  function catalogue:createCollectionSet(nom) return { nom = nom } end
+  function catalogue:createCollectionSet(nom, parent)
+    for _, e in ipairs(self.ensembles) do if e.nom == nom and e.parent == parent then return e end end
+    local e = { nom = nom, parent = parent }
+    self.ensembles[#self.ensembles + 1] = e
+    return e
+  end
   function catalogue:getChildCollections()
     local r = {}
-    for _, c in ipairs(collections) do r[#r + 1] = c end
+    for _, c in ipairs(collections) do if not c.parent then r[#r + 1] = c end end
     return r
   end
   function catalogue:setActiveSources(s) journal[#journal + 1] = 'source ' .. s[1].nom end
@@ -218,7 +233,6 @@ local function nouveauCatalogue(photos)
   end
   return catalogue
 end
-
 
 local MARQUEUR = '# historique-commun-deduplicate-google-v1\r\n'
 local HISTORIQUE = PROJET .. '/photos-traitees.txt'
@@ -259,6 +273,92 @@ local bilan = dialogues[#dialogues] and dialogues[#dialogues].texte or ''
 verifier('bilan déjà présentes', bilan:match('(%d+) photos téléchargées étaient déjà au catalogue'), '1')
 verifier('bilan importées', bilan:match('(%d+) photos importées'), '1')
 verifier('pas d’erreur interne', bilan:match('erreurs internes'), nil)
+
+-- Le rapprochement d'un gros fichier doit confirmer son contenu central, puis continuer à
+-- reconnaître les vrais doublons. Deux fichiers de 66 Mo ont le même début et la même fin.
+local grandOriginal = ecrire('audit-grand-original.mp4', '')
+local grandTelecharge = ecrire('photos-albums-test-manquantes/audit-grand-telecharge.mp4', '')
+local bloc = string.rep('A', 1024 * 1024)
+for _, chemin in ipairs({ grandOriginal, grandTelecharge }) do
+  local f = assert(io.open(chemin, 'wb'))
+  for i = 1, 66 do
+    assert(f:write(chemin == grandTelecharge and i == 33 and ('B' .. bloc:sub(2)) or bloc))
+  end
+  assert(f:close())
+end
+ecrire('photos-albums-test.csv', 'album;fichier;date_prise_de_vue;id_photo\r\nGros fichiers;inconnu.mp4;;grand\r\n')
+ecrire('photos-albums-test-manquantes/telechargements.csv',
+  'album;fichier;date_prise_de_vue;id_photo;fichier_telecharge\r\nGros fichiers;inconnu.mp4;;grand;' .. grandTelecharge .. '\r\n')
+local ancienDigest = mocks.LrMD5.digest
+mocks.LrMD5.digest = require('md5').sumhexa
+local photoGrande = nouvellePhoto(150, grandOriginal)
+nouveauCatalogue({ photoGrande })
+dofile(PLUGIN .. '/RecreerAlbums.lua')
+verifier('gros fichiers : contenu central différent importé', #catalogue.photos, 2)
+local f = assert(io.open(grandTelecharge, 'r+b'))
+assert(f:seek('set', 32 * 1024 * 1024)); assert(f:write('A')); assert(f:close())
+nouveauCatalogue({ photoGrande })
+dofile(PLUGIN .. '/RecreerAlbums.lua')
+verifier('gros fichiers : contenu complet identique non réimporté', #catalogue.photos, 1)
+verifier('gros fichiers : original dans l’album', collections[1] and collections[1].photos[photoGrande], true)
+mocks.LrMD5.digest = ancienDigest
+
+-- Les identifiants Google séparent les homonymes. Le suffixe reste attaché au même album
+-- même si l'ordre du CSV change. Les deux albums peuvent partager une photo.
+local enteteIds = 'album;fichier;date_prise_de_vue;id_photo;id_album;dedup\r\n'
+local ligneA = 'Vacances;A.JPG;2025-01-01 12:00:00;pA;album-a;dA\r\n'
+local ligneB = 'Vacances;B.JPG;2025-01-01 12:00:00;pB;album-b;dB\r\n'
+local lignePartagee = 'Vacances;A.JPG;2025-01-01 12:00:00;pA;album-b;dA\r\n'
+local a = nouvellePhoto(160, ecrire('homonymes/A.JPG', 'A'), { date = dateLr('2025-01-01 12:00:00') })
+local b = nouvellePhoto(161, ecrire('homonymes/B.JPG', 'B'), { date = dateLr('2025-01-01 12:00:00') })
+nouveauCatalogue({ a, b })
+for passage, contenu in ipairs({ ligneB .. lignePartagee .. ligneA, ligneA .. ligneB .. lignePartagee }) do
+  ecrire('photos-albums-test.csv', enteteIds .. contenu)
+  dofile(PLUGIN .. '/RecreerAlbums.lua')
+  local albumsIds, epoquesIds = {}, {}
+  for _, c in ipairs(collections) do
+    local racine = c.parent and c.parent.parent and c.parent.parent.nom
+    if racine == 'Google Photos - albums' then albumsIds[c.nom] = c end
+    if racine == 'Google Photos - époques' then epoquesIds[c.nom] = c end
+  end
+  local premier, second = albumsIds['2025-01-01 – Vacances'], albumsIds['2025-01-01 – Vacances (2)']
+  verifier('homonymes passage ' .. passage .. ' : premier album présent', premier ~= nil, true)
+  verifier('homonymes passage ' .. passage .. ' : second album présent', second ~= nil, true)
+  verifier('homonymes passage ' .. passage .. ' : premier album contient A', premier and premier.photos[a], true)
+  verifier('homonymes passage ' .. passage .. ' : premier album ne contient pas B', premier and premier.photos[b], nil)
+  verifier('homonymes passage ' .. passage .. ' : second album contient B', second and second.photos[b], true)
+  verifier('homonymes passage ' .. passage .. ' : photo partagée dans le second', second and second.photos[a], true)
+  local nbAlbums, nbEpoques = 0, 0
+  for _ in pairs(albumsIds) do nbAlbums = nbAlbums + 1 end
+  for _ in pairs(epoquesIds) do nbEpoques = nbEpoques + 1 end
+  verifier('homonymes passage ' .. passage .. ' : deux albums sans doublon au relancement', nbAlbums, 2)
+  verifier('homonymes passage ' .. passage .. ' : deux époques', nbEpoques, 2)
+end
+
+-- Les collisions n'apparaissent parfois qu'après le refus d'un caractère par Lightroom.
+-- Un nom littéral déjà suffixé doit lui aussi rester distinct, puis être retrouvé au relancement.
+local titresNettoyes = { 'A-B', 'A-B (2)', 'A/B', 'A:B', 'a\\b' }
+nouveauCatalogue({ a, b })
+catalogue.refuserCaracteres = true
+for passage = 1, 2 do
+  local contenu = enteteIds
+  for i, titre in ipairs(titresNettoyes) do
+    contenu = contenu .. titre .. ';A.JPG;2025-01-01 12:00:00;pA;nettoye-' .. i .. ';dA\r\n'
+  end
+  ecrire('photos-albums-test.csv', contenu)
+  dofile(PLUGIN .. '/RecreerAlbums.lua')
+  local nbAlbums, nbEpoques, noms = 0, 0, {}
+  for _, c in ipairs(collections) do
+    local racine = c.parent and c.parent.parent and c.parent.parent.nom
+    if racine == 'Google Photos - albums' then
+      nbAlbums = nbAlbums + 1
+      verifier('noms nettoyés : nom accepté et unique', not noms[c.nom:lower()] and not c.nom:find('[:/\\]'), true)
+      noms[c.nom:lower()] = true
+    elseif racine == 'Google Photos - époques' then nbEpoques = nbEpoques + 1 end
+  end
+  verifier('noms nettoyés passage ' .. passage .. ' : cinq albums distincts', nbAlbums, 5)
+  verifier('noms nettoyés passage ' .. passage .. ' : cinq époques distinctes', nbEpoques, 5)
+end
 
 -- Albums et copies retirées : la copie en trop (dans « Doublons à retirer ») est placée la première
 -- dans le catalogue, donc c'est elle que la correspondance prendrait ; elle doit être ignorée, et

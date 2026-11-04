@@ -37,8 +37,8 @@ import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from '
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { cadresAdjacents, cheminsExclus, cleCadre, nomRetouche, normaliserChemin, numeroCadre,
-  raisonsProtection, tailleBlocDemandee } from './rafales-regles.mjs';
+import { cheminsExclus, cleCadre, detecterRafales, nomRetouche, normaliserChemin, numeroCadre,
+  raisonsProtection, serieCadre, tailleBlocDemandee } from './rafales-regles.mjs';
 
 const executer = promisify(execFile);
 
@@ -145,7 +145,9 @@ for (const f of fichiers) {
   f.chemin = f.dossier + f.nom + '.' + f.ext;
   f.derive = nomRetouche(nomComplet);
   const cle = cleCadre(f.dossier, f.t, nomComplet);
-  if (!cadres.has(cle)) cadres.set(cle, { t: f.t, numero: f.numero, fichiers: [] });
+  if (!cadres.has(cle)) cadres.set(cle, {
+    dossier: f.dossier, serie: serieCadre(nomComplet), t: f.t, numero: f.numero, fichiers: [],
+  });
   cadres.get(cle).fichiers.push(f);
 }
 const liste = [...cadres.values()].sort((a, b) => a.t - b.t || a.numero - b.numero);
@@ -160,14 +162,7 @@ for (const c of liste) {
   c.nom = (c.fichiers.find((f) => !f.derive && !/-\d$/.test(f.nom)) ?? c.fichiers[0]).nom;
 }
 
-const adjacents = (a, b) => cadresAdjacents(a, b, ECART_MAX_SECONDES, ECART_MAX_NUMERO);
-const rafales = [];
-let courante = [];
-for (const c of liste) {
-  if (courante.length && adjacents(courante.at(-1), c)) courante.push(c);
-  else { if (courante.length >= MIN_CADRES) rafales.push(courante); courante = [c]; }
-}
-if (courante.length >= MIN_CADRES) rafales.push(courante);
+const rafales = detecterRafales(liste, MIN_CADRES, ECART_MAX_SECONDES, ECART_MAX_NUMERO);
 
 // --- Mesures (netteté, miniature) -------------------------------------------------------------------------
 

@@ -15,11 +15,66 @@
 // Demande ffmpeg : winget install Gyan.FFmpeg
 
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, utimesSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 const DOSSIER_SORTIE = 'photos-albums-tous-videos-converties';
 const CONVERSIONS_SIMULTANEES = 2;
+
+const cleSource = (chemin) => path.resolve(chemin).toLowerCase();
+
+// Les destinations appartiennent durablement à leur source, même si le journal change.
+// Sans manifeste, un ancien fichier reste réservé : il ne prouve pas quelle source l'a créé.
+function preparerConversions(entrees) {
+  const fichier = path.join(DOSSIER_SORTIE, 'conversions.json');
+  const manifeste = existsSync(fichier) ? JSON.parse(readFileSync(fichier, 'utf8')) : { version: 1, conversions: [] };
+  if (manifeste.version !== 1 || !Array.isArray(manifeste.conversions)) {
+    throw new Error(`Manifeste de conversions invalide : ${fichier}`);
+  }
+  const parSource = new Map(), proprietaires = new Set();
+  const pris = new Set(readdirSync(DOSSIER_SORTIE).map((n) => n.toLowerCase()));
+  for (const conversion of manifeste.conversions) {
+    if (!conversion || typeof conversion.source !== 'string' || !conversion.source
+      || typeof conversion.sortie !== 'string' || conversion.sortie !== path.basename(conversion.sortie)
+      || !/\.mp4$/i.test(conversion.sortie) || parSource.has(cleSource(conversion.source))
+      || proprietaires.has(conversion.sortie.toLowerCase())) {
+      throw new Error(`Manifeste de conversions incohérent : ${fichier}`);
+    }
+    parSource.set(cleSource(conversion.source), conversion);
+    proprietaires.add(conversion.sortie.toLowerCase());
+    pris.add(conversion.sortie.toLowerCase());
+  }
+  const travaux = [];
+  const vus = new Set();
+  for (const entree of entrees) {
+    const cle = cleSource(entree);
+    if (vus.has(cle)) continue;
+    vus.add(cle);
+    let conversion = parSource.get(cle);
+    if (!conversion) {
+      const base = path.basename(entree, path.extname(entree));
+      let nom = base + '.mp4';
+      for (let n = 2; pris.has(nom.toLowerCase()); n++) nom = base + '_' + n + '.mp4';
+      pris.add(nom.toLowerCase());
+      conversion = { source: path.resolve(entree), sortie: nom };
+      parSource.set(cle, conversion);
+      manifeste.conversions.push(conversion);
+    }
+    travaux.push({ entree, sortie: path.join(DOSSIER_SORTIE, conversion.sortie), conversion });
+  }
+  const enregistrer = () => {
+    const temporaire = path.join(DOSSIER_SORTIE, '.conversions-' + randomUUID() + '.tmp');
+    try {
+      writeFileSync(temporaire, JSON.stringify(manifeste, null, 2));
+      renameSync(temporaire, fichier);
+    } finally {
+      if (existsSync(temporaire)) unlinkSync(temporaire);
+    }
+  };
+  enregistrer();
+  return { travaux, enregistrer };
+}
 
 // ffmpeg : dans le PATH, sinon dans le dossier où winget l'installe.
 function trouverFfmpeg() {
@@ -70,16 +125,7 @@ async function main() {
   console.log(`${fichiers.length} vidéos dans le journal${absents.length > 0 ? `, ${absents.length} introuvables sur le disque` : ''}.`);
 
   mkdirSync(DOSSIER_SORTIE, { recursive: true });
-  // Deux vidéos qui ne diffèrent que par l'extension (A.MOV, A.mp4) ne doivent pas s'écraser :
-  // la seconde devient A_2.mp4. L'ordre du journal étant fixe, le nom reste le même d'un passage à l'autre.
-  const pris = new Set();
-  const travaux = aConvertir.map((entree) => {
-    const base = path.basename(entree, path.extname(entree));
-    let nom = base + '.mp4';
-    for (let n = 2; pris.has(nom.toLowerCase()); n++) nom = base + '_' + n + '.mp4';
-    pris.add(nom.toLowerCase());
-    return { entree, sortie: path.join(DOSSIER_SORTIE, nom) };
-  });
+  const { travaux, enregistrer } = preparerConversions(aConvertir);
 
   const echecs = [];
   let faits = 0, ignores = 0;
@@ -87,19 +133,27 @@ async function main() {
   const file = [...travaux];
   await Promise.all(Array.from({ length: CONVERSIONS_SIMULTANEES }, async () => {
     while (file.length > 0) {
-      const { entree, sortie } = file.shift();
-      if (existsSync(sortie) && statSync(sortie).size > 0 && Math.abs(statSync(sortie).mtimeMs - statSync(entree).mtimeMs) < 2000) {
+      const { entree, sortie, conversion } = file.shift();
+      const date = statSync(entree);
+      if (existsSync(sortie) && conversion.tailleSource === date.size && conversion.dateSource === date.mtimeMs
+        && conversion.tailleSortie > 0 && statSync(sortie).size === conversion.tailleSortie
+        && Math.abs(statSync(sortie).mtimeMs - date.mtimeMs) < 2000) {
         ignores++;
       } else {
-        const provisoire = sortie.replace(/\.mp4$/i, '.partiel.mp4');
-        const r = await convertir(ffmpeg, entree, provisoire);
-        if (r.ok) {
-          // La date du fichier converti = celle de l'original : sert à reconnaître un passage déjà fait.
-          const date = statSync(entree);
-          utimesSync(provisoire, date.atime, date.mtime);
-          renameSync(provisoire, sortie);
-        } else {
-          echecs.push({ entree, erreur: r.erreur });
+        // Un nom temporaire indépendant ne peut pas écraser la sortie de A.partiel.MOV.
+        const provisoire = path.join(DOSSIER_SORTIE, '.conversion-' + randomUUID() + '.mp4');
+        try {
+          const r = await convertir(ffmpeg, entree, provisoire);
+          if (r.ok) {
+            utimesSync(provisoire, date.atime, date.mtime);
+            renameSync(provisoire, sortie);
+            Object.assign(conversion, { tailleSource: date.size, dateSource: date.mtimeMs, tailleSortie: statSync(sortie).size });
+            enregistrer();
+          } else {
+            echecs.push({ entree, erreur: r.erreur });
+          }
+        } finally {
+          if (existsSync(provisoire)) unlinkSync(provisoire);
         }
       }
       faits++;

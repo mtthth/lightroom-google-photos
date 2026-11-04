@@ -11,6 +11,37 @@ const contexte = vm.createContext({
   lireCsv: (f) => fichiers.get(f),
 });
 vm.runInContext(source.slice(source.indexOf('async function nomsFichiers'), source.indexOf('// --- Photos hors album')), contexte);
+vm.runInContext(source.slice(source.indexOf('async function extraireAlbums'), source.indexOf('// Noms de fichiers')), contexte);
+
+const photo = (id) => [id, null, Date.UTC(2025, 0, 1), 'dedup-' + id, 0];
+const listeAlbums = (nombre) => [[['id', { 72930366: [null, 'A', [], nombre] }]], null];
+const rpcAlbum = (nombre, pages) => async (id, parametres) => {
+  if (id === 'Z5xsfc') return listeAlbums(nombre);
+  assert.equal(id, 'snAcKc');
+  return pages.get(parametres[1]);
+};
+for (const reponse of [null, {}, [], [null], [null, {}]]) {
+  await assert.rejects(contexte.extraireAlbums(rpcAlbum(2, new Map([[null, reponse]])), null, {}), /réponse|incomplet/i);
+}
+await assert.rejects(contexte.extraireAlbums(rpcAlbum(2, new Map([[null, [null, [photo('p1')], null]]])), null, {}), /incomplet/i);
+await assert.rejects(contexte.extraireAlbums(rpcAlbum(2, new Map([[null, [null, [photo('p1'), photo('p1')], null]]])), null, {}), /doublon|répété/i);
+await assert.rejects(contexte.extraireAlbums(rpcAlbum(2, new Map([
+  [null, [null, [photo('p1')], 'suite']], ['suite', [null, [photo('p2')], 'suite']],
+])), null, {}), /page|répété/i);
+for (const reponse of [null, {}, []]) {
+  await assert.rejects(contexte.extraireAlbums(async () => reponse, null, {}), /réponse/i);
+  await assert.rejects(contexte.listerBibliotheque(async () => reponse), /réponse/i);
+}
+for (const listeVide of [[], null]) {
+  const vide = await contexte.extraireAlbums(rpcAlbum(0, new Map([[null, [null, listeVide, null]]])), null, {});
+  assert.equal(vide[0].photos.length, 0, 'un véritable album vide reste accepté');
+}
+assert.equal((await contexte.extraireAlbums(async () => [null, null], null, {})).length, 0);
+assert.equal((await contexte.listerBibliotheque(async () => [null, null])).length, 0);
+const complet = await contexte.extraireAlbums(rpcAlbum(2, new Map([
+  [null, [null, [photo('p1')], 'suite']], ['suite', [null, [photo('p2')], null]],
+])), null, {});
+assert.deepEqual(Array.from(complet[0].photos, (p) => p.cle), ['p1', 'p2']);
 
 let appels = [];
 const noms = await contexte.nomsFichiers(async (_id, parametres) => {
@@ -40,6 +71,12 @@ assert.equal(Object.keys(contexte.lirePrecedent('tous').signatures).length, 0);
 fichiers.set('albums-tous.csv', [enteteAlbums, ['Vide', '0', '', 'tous', 'vide', 'sig']]);
 fichiers.set('photos-albums-tous.csv', [entetePhotos]);
 assert.equal(contexte.lirePrecedent('tous').signatures.vide, 'sig');
+// Répare aussi les caches déjà empoisonnés : le compte encodé dans la signature venait de Google.
+fichiers.set('albums-tous.csv', [enteteAlbums, ['A', '0', '', 'tous', 'id', 'A|2|123']]);
+assert.equal(Object.keys(contexte.lirePrecedent('tous').signatures).length, 0);
+fichiers.set('albums-tous.csv', [enteteAlbums, ['A', '2', '', 'tous', 'id', 'A|2|123']]);
+fichiers.set('photos-albums-tous.csv', [entetePhotos, ['A', '', '', 'p1', 'id', ''], ['A', '', '', 'p1', 'id', '']]);
+assert.equal(Object.keys(contexte.lirePrecedent('tous').signatures).length, 0);
 
 // Vérifie le chemin complet : un album inchangé récupère ses noms absents au prochain export.
 let resultat;
@@ -60,4 +97,17 @@ const execution = vm.createContext({
 vm.runInContext(source.slice(source.indexOf('async function main()'), source.indexOf('main().catch')), execution);
 await execution.main();
 assert.equal(resultat[0].photos[0].fichier, 'retrouve.jpg');
-console.log('Export albums : réponses partielles et validation du cache OK');
+
+// Aucune sortie ne remplace les exports précédents si la bibliothèque échoue après les albums.
+resultat = undefined;
+let horsAlbumEcrit = false;
+execution.ecrireHorsAlbum = () => { horsAlbumEcrit = true; };
+const evaluer = execution.evaluerDansPage;
+execution.evaluerDansPage = async (cdp, fonction, ...args) => {
+  if (fonction === execution.listerBibliotheque) throw new Error('bibliothèque indisponible');
+  return evaluer(cdp, fonction, ...args);
+};
+await assert.rejects(execution.main(), /bibliothèque indisponible/);
+assert.equal(resultat, undefined, 'les CSV d’albums précédents sont préservés');
+assert.equal(horsAlbumEcrit, false);
+console.log('Export albums : réponses partielles, pagination, cache et préservation des exports OK');

@@ -33,13 +33,46 @@ export function numeroCadre(nom) {
 }
 
 export function cleCadre(dossier, t, nom) {
-  const numero = numeroCadre(nom);
-  return `${dossier.toLowerCase()}|${Math.floor(t)}|${numero}${numero < 0 ? '|' + nomDeBase(nom) : ''}`;
+  return `${normaliserChemin(dossier)}|${Math.floor(t)}|${nomDeBase(nom)}`;
+}
+
+// Le compteur seul ne distingue pas IMG_0123 et DSCF0123. Une série conserve le préfixe
+// et les autres parties du nom, en remplaçant uniquement le dernier compteur.
+export function serieCadre(nom) {
+  return nomDeBase(nom).replace(/\d{3,}(?!.*\d{3,})/, '#');
 }
 
 export function cadresAdjacents(a, b, ecartSecondes = 1, ecartNumero = 3) {
-  return b.t - a.t <= ecartSecondes && (a.numero < 0 || b.numero < 0 || a.numero >= 100000
+  if (a.dossier !== undefined && b.dossier !== undefined
+    && normaliserChemin(a.dossier) !== normaliserChemin(b.dossier)) return false;
+  if (a.serie !== undefined && b.serie !== undefined && a.serie !== b.serie) return false;
+  return b.t >= a.t && b.t - a.t <= ecartSecondes && (a.numero < 0 || b.numero < 0 || a.numero >= 100000
     || b.numero >= 100000 || Math.abs(b.numero - a.numero) <= ecartNumero);
+}
+
+// Détecter séparément chaque dossier et série : un tri global par date intercalerait leurs
+// cadres et couperait les rafales de chacun dès qu'un autre dossier apparaît.
+export function detecterRafales(cadres, minimum = 3, ecartSecondes = 1, ecartNumero = 3) {
+  const groupes = new Map();
+  for (const cadre of cadres) {
+    const cle = JSON.stringify([normaliserChemin(cadre.dossier ?? ''), cadre.serie ?? '']);
+    if (!groupes.has(cle)) groupes.set(cle, []);
+    groupes.get(cle).push(cadre);
+  }
+  const rafales = [];
+  for (const groupe of groupes.values()) {
+    groupe.sort((a, b) => a.t - b.t || a.numero - b.numero);
+    let courante = [];
+    for (const c of groupe) {
+      if (courante.length && !cadresAdjacents(courante.at(-1), c, ecartSecondes, ecartNumero)) {
+        if (courante.length >= minimum) rafales.push(courante);
+        courante = [];
+      }
+      courante.push(c);
+    }
+    if (courante.length >= minimum) rafales.push(courante);
+  }
+  return rafales.sort((a, b) => a[0].t - b[0].t);
 }
 
 export const normaliserChemin = (chemin) => chemin.replaceAll('/', '\\').toLowerCase();

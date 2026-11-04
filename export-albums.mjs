@@ -41,11 +41,21 @@ async function extraireAlbums(rpc, annee, precedent) {
 
   log('Lecture de la liste des albums…');
   const albums = [];
+  const pagesVues = new Set();
+  const albumsVus = new Set();
   let page = null;
   do {
     const rep = await rpc('Z5xsfc', [page, null, null, null, 1, null, null, 100, [2], 5]);
-    for (const a of rep?.[0] ?? []) {
-      const info = a.at(-1)?.[72930366] ?? [];
+    if (!Array.isArray(rep) || !(Array.isArray(rep[0]) || rep[0] === null)) {
+      throw new Error('Réponse invalide à la lecture de la liste des albums. Export précédent conservé.');
+    }
+    for (const a of rep[0] ?? []) {
+      if (!Array.isArray(a) || typeof a[0] !== 'string' || !a[0] || !Array.isArray(a.at(-1)?.[72930366])) {
+        throw new Error('Réponse invalide : album sans identifiant ou métadonnées.');
+      }
+      if (albumsVus.has(a[0])) throw new Error('Album répété dans la liste de Google Photos.');
+      albumsVus.add(a[0]);
+      const info = a.at(-1)[72930366];
       const dates = info[2] ?? [];
       const titre = info[1] || '(sans titre)';
       albums.push({
@@ -55,11 +65,14 @@ async function extraireAlbums(rpc, annee, precedent) {
         premierePhoto: dates[0] ?? dates[5]?.[0] ?? null,
         dernierePhoto: dates[1] ?? dates[6]?.[0] ?? null,
         cleAcces: info[5] ?? null,
+        nombrePhotos: Number.isSafeInteger(info[3]) && info[3] >= 0 ? info[3] : null,
         // Change quand l'album est renommé, qu'on y ajoute ou retire des photos, ou qu'il est modifié.
         signature: [titre, info[3] ?? '', dates[9] ?? ''].join('|'),
       });
     }
     page = rep?.[1];
+    if (page && pagesVues.has(page)) throw new Error('Page répétée dans la liste des albums.');
+    if (page) pagesVues.add(page);
   } while (page);
   log(`${albums.length} albums dans le compte.`);
 
@@ -90,10 +103,21 @@ async function extraireAlbums(rpc, annee, precedent) {
     }
     relus++;
     const photos = [];
+    const photosVues = new Set();
+    const pagesAlbumVues = new Set();
     let pageAlbum = null;
     do {
       const rep = await rpc('snAcKc', [album.cle, pageAlbum, null, album.cleAcces]);
-      for (const p of rep?.[1] ?? []) {
+      if (!Array.isArray(rep) || !(Array.isArray(rep[1])
+        || (rep[1] === null && album.nombrePhotos === 0 && !pageAlbum))) {
+        throw new Error(`Réponse invalide pour l'album « ${album.titre} ». Export précédent conservé.`);
+      }
+      for (const p of rep[1] ?? []) {
+        if (!Array.isArray(p) || typeof p[0] !== 'string' || !p[0]) {
+          throw new Error(`Réponse invalide : photo sans identifiant dans « ${album.titre} ».`);
+        }
+        if (photosVues.has(p[0])) throw new Error(`Photo répétée dans l'album « ${album.titre} ».`);
+        photosVues.add(p[0]);
         // Heure locale de la prise de vue : horodatage UTC + décalage du fuseau.
         const local = new Date(p[2] + (p[4] ?? 0));
         photos.push({
@@ -104,7 +128,13 @@ async function extraireAlbums(rpc, annee, precedent) {
         });
       }
       pageAlbum = rep?.[2];
+      if (pageAlbum && pagesAlbumVues.has(pageAlbum)) throw new Error(`Page répétée dans l'album « ${album.titre} ».`);
+      if (pageAlbum) pagesAlbumVues.add(pageAlbum);
     } while (pageAlbum);
+    if (album.nombrePhotos !== null && photos.length !== album.nombrePhotos) {
+      throw new Error(`Album « ${album.titre} » incomplet : ${photos.length} photos reçues, `
+        + `${album.nombrePhotos} annoncées. Relance l'export ; les fichiers précédents sont conservés.`);
+    }
 
     if (tous) album.criteres.push('tous');
     else if (photos.some((p) => p.annee === annee)) album.criteres.push('photos');
@@ -131,11 +161,17 @@ async function extraireAlbums(rpc, annee, precedent) {
 async function listerBibliotheque(rpc) {
   const log = (...msg) => console.log('[export]', ...msg);
   const photos = [];
+  const pagesVues = new Set();
   let page = null;
   do {
     const rep = await rpc('lcxiM', [page, null, 500, null, 1, 3]);
-    for (const p of rep?.[0] ?? []) photos.push([p[0], p[3], p[2], p[4] ?? 0]);
+    if (!Array.isArray(rep) || !(Array.isArray(rep[0]) || rep[0] === null)) {
+      throw new Error('Réponse invalide à la lecture de la bibliothèque. Export précédent conservé.');
+    }
+    for (const p of rep[0] ?? []) photos.push([p[0], p[3], p[2], p[4] ?? 0]);
     page = rep?.[1];
+    if (page && pagesVues.has(page)) throw new Error('Page répétée dans la bibliothèque.');
+    if (page) pagesVues.add(page);
     if (photos.length % 5000 < 500) log(`Bibliothèque : ${photos.length} photos listées…`);
   } while (page);
   return photos;
@@ -184,13 +220,28 @@ function lirePrecedent(suffixe) {
       return vide;
     }
     comptes.set(ligne[4], Number(ligne[1]));
+    // Les anciennes versions pouvaient enregistrer une réponse partielle avec sa signature
+    // complète. Le compte annoncé par Google est l'avant-dernier champ de cette signature.
+    const annonce = ligne[5].match(/\|(\d+)\|[^|]*$/);
+    if (annonce && Number(annonce[1]) !== Number(ligne[1])) {
+      console.log('Export précédent incomplet selon la signature Google : export complet.');
+      return vide;
+    }
     precedent.signatures[ligne[4]] = ligne[5];
   }
   if (photos.some((ligne) => ligne.length !== 6 || !ligne[3] || !comptes.has(ligne[4]))) {
     console.log('Export précédent invalide : export complet.');
     return vide;
   }
+  const identifiantsParAlbum = new Map();
   for (const [, fichier, date, idPhoto, idAlbum, dedup] of photos) {
+    if (!identifiantsParAlbum.has(idAlbum)) identifiantsParAlbum.set(idAlbum, new Set());
+    const identifiants = identifiantsParAlbum.get(idAlbum);
+    if (identifiants.has(idPhoto)) {
+      console.log('Export précédent avec des photos répétées dans un album : export complet.');
+      return vide;
+    }
+    identifiants.add(idPhoto);
     if (!precedent.photosParAlbum.has(idAlbum)) precedent.photosParAlbum.set(idAlbum, []);
     precedent.photosParAlbum.get(idAlbum).push({ fichier, date, cle: idPhoto, dedup });
     if (fichier) precedent.noms.set(idPhoto, fichier);
@@ -316,7 +367,7 @@ async function main() {
     for (const a of albums) {
       a.photos = a.photos.map((p) => ({ ...p, fichier: p.fichier || precedent.noms.get(p.cle) || nouveauxNoms[p.cle] || '' }));
     }
-    ecrireResultats(albums, suffixe);
+    let resultatHorsAlbum = null;
 
     // Sans année : les photos hors album aussi (toute la bibliothèque, moins celles des albums).
     if (annee === null) {
@@ -332,8 +383,11 @@ async function main() {
         const nouveaux = await evaluerDansPage(cdp, nomsFichiers, inconnus);
         for (const [cle, nom] of Object.entries(nouveaux)) if (nom) noms.set(cle, nom);
       }
-      ecrireHorsAlbum(horsAlbum, noms);
+      resultatHorsAlbum = { photos: horsAlbum, noms };
     }
+    // Toute la collecte doit réussir avant de remplacer un des exports précédents.
+    ecrireResultats(albums, suffixe);
+    if (resultatHorsAlbum) ecrireHorsAlbum(resultatHorsAlbum.photos, resultatHorsAlbum.noms);
     cdp.fermer();
   } finally {
     if (lanceParLeScript) await fermerChrome();
