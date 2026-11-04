@@ -27,3 +27,7 @@ photos-traitees*.tmp*
 log.txt
 
 node_modules/
+
+# Archives et fichiers de travail de la séparation du plugin Deduplicate.
+audit-fusion-temp/
+*.lrplugin.zip

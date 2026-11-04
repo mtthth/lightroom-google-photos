@@ -74,7 +74,23 @@ extension que le fichier Google qui est mis dans la collection d'album (les deux
 
 ## Déduplication
 
-Les commandes de fusion des doublons et de réduction des rafales sont maintenant dans le plugin séparé [`lightroom-deduplicate`](lightroom-deduplicate/LISEZ-MOI.md). Il partage l’historique `photos-traitees.txt` avec ce plugin pour que les photos écartées ne réapparaissent pas lors de la recréation des albums Google Photos.
+Les commandes de fusion des doublons et de réduction des rafales sont dans le dépôt séparé
+[`lightroom-deduplicate`](https://github.com/mtthth/lightroom-deduplicate). Les deux projets doivent être voisins :
+
+```text
+projets/
+  lightroom-google-photos/
+    albums-google-photos.lrplugin/
+    photos-traitees.txt
+  lightroom-deduplicate/
+    lightroom-deduplicate.lrplugin/
+```
+
+Ajoute les deux dossiers `.lrplugin` au gestionnaire de modules externes de Lightroom et active-les.
+Après leur mise à jour, redémarre Lightroom. Deduplicate initialise et synchronise seul l’historique commun
+`lightroom-google-photos/photos-traitees.txt`, y compris après Annuler / Rétablir. Google Photos le lit pour
+que les photos écartées ne réapparaissent pas dans les albums, les époques ou les téléchargements.
+Si le module signale un historique non initialisé, recharge Deduplicate avant de recréer les albums.
 
 ### Export « Google Photos » (envoyer une collection)
 
@@ -96,13 +112,17 @@ Depuis mars 2025, l'API ne permet de compléter que les albums créés par l'app
 ## Tests
 
 ```
-node tests/lancer.mjs             # les sept suites Lua et les règles des rafales en JavaScript
-node tests/lancer.mjs --mutants   # puis casse une règle à la fois : les tests doivent échouer (quelques minutes)
+node tests/lancer.mjs             # quatre suites Lua et deux suites JavaScript
+node tests/lancer.mjs --js        # JavaScript seul, sans MiKTeX
+node tests/lancer.mjs --mutants   # puis vérifie quatre régressions de recréation des albums
 ```
 
-Ils tournent hors de Lightroom avec `texlua` (le Lua de MiKTeX ; variable `TEXLUA` pour un autre chemin), un faux
-Lightroom et le vrai ImageMagick. Les tests JavaScript vérifient les règles du rapport des rafales à blanc,
-notamment les numéros Pixel, les noms sans numéro et les exclusions persistantes.
+Ils tournent sous Windows, hors de Lightroom, avec `texlua` (le Lua de MiKTeX ; variable `TEXLUA` pour un autre
+chemin) et un faux Lightroom. Ils n’ouvrent pas Chrome, n’appellent pas Google et n’utilisent pas ton catalogue
+ni tes exports personnels. Les suites Lua vérifient la recréation des albums, les exclusions de l’historique,
+les empreintes de fichiers, le service d’export et le JSON. Les tests JavaScript vérifient les règles du rapport
+des rafales à blanc et la reprise des exports incrémentaux. Les tests de Deduplicate se lancent depuis son
+propre dépôt ; aucun checkout de Deduplicate n’est nécessaire pour tester Google Photos.
 
 ## À savoir
 
@@ -138,8 +158,8 @@ notamment les numéros Pixel, les noms sans numéro et les exclusions persistant
 | `connexion-google-photos.mjs` | Connexion à Google pour l'export « Google Photos » (lancé par le module au besoin) |
 | `rafales-a-blanc.mjs`, `rafales-regles.mjs` | Rapport HTML des rafales d'un dossier et ses règles, sans rien modifier |
 | `albums-google-photos.lrplugin` | Plugin Lightroom Albums Google Photos : recréation des albums (`RecreerAlbums.lua`, `Correspondance.lua`, `Epoques.lua`, `Noms.lua`) et export (`ServiceGooglePhotos.lua`, `GooglePhotos.lua`, `Json.lua`, `presets\`) |
-| `lightroom-deduplicate` | Plugin Lightroom Deduplicate : fusion de doublons et réduction des rafales. Voir son [`LISEZ-MOI.md`](lightroom-deduplicate/LISEZ-MOI.md) |
-| `tests\` | Tests des deux plugins, hors de Lightroom (`node tests/lancer.mjs`) |
+| Dépôt voisin [`lightroom-deduplicate`](https://github.com/mtthth/lightroom-deduplicate) | Plugin autonome de fusion des doublons et de réduction des rafales |
+| `tests\` | Tests autonomes de Google Photos, hors de Lightroom (`node tests/lancer.mjs`) |
 | `albums-tous.csv`, `photos-albums-tous.csv` | Export des albums (inutile d'y toucher) |
 | `photos-hors-album.csv` | Photos de la bibliothèque qui ne sont dans aucun album, au même format |
 | `photos-albums-tous-non-trouvees.csv` | Photos que le module n'a pas retrouvées dans le catalogue |

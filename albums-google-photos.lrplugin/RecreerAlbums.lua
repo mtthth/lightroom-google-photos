@@ -26,7 +26,6 @@ local GoogleCollections = require 'GoogleCollections'
 local Empreintes = require 'Empreintes'
 local Epoques = require 'Epoques'
 local Historique = require 'Historique'
-local Annulation = require 'Annulation'
 local Noms = require 'Noms'
 
 -- Collections de mise à l'écart gérées par le plugin Deduplicate.
@@ -236,7 +235,10 @@ local function indexerCatalogue(catalogue, progression, problemes)
   progression:setCaption('Lecture du catalogue : liste des photos…')
   local photos = catalogue:getAllPhotos()
   local ignorees, nbIgnorees = copiesEnTrop(catalogue)
-  Annulation.synchroniser(catalogue, HISTORIQUE)
+  -- Deduplicate est le seul à synchroniser ce fichier avec l'annulation Lightroom.
+  local contenu = LrFileUtils.exists(HISTORIQUE) and LrFileUtils.readFile(HISTORIQUE)
+  assert(contenu and contenu:find('# historique-commun-deduplicate-google-v1', 1, true),
+    'Historique partagé non initialisé : recharge le module Deduplicate avant de recréer les albums.')
   local historique = Historique.lire(HISTORIQUE)
   local index = Correspondance.nouvelIndex()
   index.traitees = Correspondance.nouvelIndex()

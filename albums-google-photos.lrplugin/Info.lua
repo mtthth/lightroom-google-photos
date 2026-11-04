@@ -5,10 +5,6 @@ return {
   LrSdkMinimumVersion = 6.0,
   LrToolkitIdentifier = 'fr.matthieu.albumsgooglephotos',
   LrPluginName = 'Albums Google Photos',
-  LrInitPlugin = 'Initialiser.lua',
-  LrEnablePlugin = 'Initialiser.lua',
-  LrShutdownPlugin = 'Arreter.lua',
-  LrDisablePlugin = 'Arreter.lua',
   LrLibraryMenuItems = {
     { title = 'Recréer les albums Google Photos…', file = 'RecreerAlbums.lua' },
   },
