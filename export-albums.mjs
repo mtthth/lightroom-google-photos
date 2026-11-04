@@ -145,10 +145,15 @@ async function listerBibliotheque(rpc) {
 async function nomsFichiers(rpc, cles) {
   const noms = {};
   for (let i = 0; i < cles.length; i += 500) {
-    const lot = cles.slice(i, i + 500).map((cle) => [cle]);
-    // prettier-ignore
-    const rep = await rpc('EWgK9e', [[[lot], [[null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, [], null, null, null, null, null, null, null, null, null, null, []]]]]);
-    for (const info of rep?.[0]?.[1] ?? []) noms[info[0]] = info[1]?.[3] ?? '';
+    let manquants = cles.slice(i, i + 500);
+    // Une réponse partielle ne provoque pas d'erreur RPC : redemander les noms absents une fois.
+    for (let essai = 0; essai < 2 && manquants.length; essai++) {
+      const lot = manquants.map((cle) => [cle]);
+      // prettier-ignore
+      const rep = await rpc('EWgK9e', [[[lot], [[null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, [], null, null, null, null, null, null, null, null, null, null, []]]]]);
+      for (const info of rep?.[0]?.[1] ?? []) noms[info[0]] = info[1]?.[3] ?? '';
+      manquants = manquants.filter((cle) => !noms[cle]);
+    }
     if ((i / 500) % 20 === 19) console.log('[export]', `Noms de fichiers : ${Math.min(i + 500, cles.length)} / ${cles.length}`);
   }
   return noms;
@@ -172,11 +177,29 @@ function lirePrecedent(suffixe) {
   }
 
   const precedent = { signatures: {}, photosParAlbum: new Map(), noms: new Map() };
-  for (const ligne of albums) if (ligne[4] && ligne[5]) precedent.signatures[ligne[4]] = ligne[5];
+  const comptes = new Map();
+  for (const ligne of albums) {
+    if (ligne.length !== 6 || !ligne[4] || !ligne[5] || !/^\d+$/.test(ligne[1]) || comptes.has(ligne[4])) {
+      console.log('Export précédent invalide : export complet.');
+      return vide;
+    }
+    comptes.set(ligne[4], Number(ligne[1]));
+    precedent.signatures[ligne[4]] = ligne[5];
+  }
+  if (photos.some((ligne) => ligne.length !== 6 || !ligne[3] || !comptes.has(ligne[4]))) {
+    console.log('Export précédent invalide : export complet.');
+    return vide;
+  }
   for (const [, fichier, date, idPhoto, idAlbum, dedup] of photos) {
     if (!precedent.photosParAlbum.has(idAlbum)) precedent.photosParAlbum.set(idAlbum, []);
     precedent.photosParAlbum.get(idAlbum).push({ fichier, date, cle: idPhoto, dedup });
     if (fichier) precedent.noms.set(idPhoto, fichier);
+  }
+  for (const [id, nombre] of comptes) {
+    if ((precedent.photosParAlbum.get(id)?.length ?? 0) !== nombre) {
+      console.log('Export précédent incomplet : export complet.');
+      return vide;
+    }
   }
   return precedent;
 }
@@ -275,10 +298,14 @@ async function main() {
 
     const albums = await evaluerDansPage(cdp, extraireAlbums, annee, precedent.signatures);
 
+    // Restaurer d'abord les photos inchangées, y compris celles dont le nom manque encore.
+    for (const a of albums) {
+      if (a.inchange) a.photos = precedent.photosParAlbum.get(a.cle) ?? [];
+    }
     // Noms de fichiers : on ne demande à Google que ceux qu'on ne connaît pas déjà.
     const inconnus = new Set();
     for (const a of albums) {
-      if (!a.inchange) for (const p of a.photos) if (!precedent.noms.has(p.cle)) inconnus.add(p.cle);
+      for (const p of a.photos) if (!p.fichier && !precedent.noms.has(p.cle)) inconnus.add(p.cle);
     }
     let nouveauxNoms = {};
     if (inconnus.size > 0) {
@@ -287,9 +314,7 @@ async function main() {
     }
 
     for (const a of albums) {
-      a.photos = a.inchange
-        ? precedent.photosParAlbum.get(a.cle) ?? []
-        : a.photos.map((p) => ({ ...p, fichier: precedent.noms.get(p.cle) ?? nouveauxNoms[p.cle] ?? '' }));
+      a.photos = a.photos.map((p) => ({ ...p, fichier: p.fichier || precedent.noms.get(p.cle) || nouveauxNoms[p.cle] || '' }));
     }
     ecrireResultats(albums, suffixe);
 
