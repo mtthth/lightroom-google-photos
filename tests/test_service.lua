@@ -28,19 +28,75 @@ local commandeExecutee
 
 local mocks = {}
 mocks.LrDate = { currentTime = function() return horloge end }
+local function lire(p) local f = io.open(p, 'rb'); if not f then return nil end; local c = f:read('*a'); f:close(); return c end
+local function ecrire(p, c) local f = assert(io.open(p, 'wb')); f:write(c); f:close() end
+
+-- Faux dossiers (pour la recherche de ffmpeg) : chemin → liste des chemins qu'il contient.
+local dossiers = {}
+local FFMPEG_WINGET = LOCAL .. '/Microsoft/WinGet/Packages/Gyan.FFmpeg_8wekyb3d8bbwe/ffmpeg-9.0.2-full_build/bin/ffmpeg.exe'
+local function installerFfmpeg(present)
+  dossiers = {}
+  if not present then return end
+  local packages = LOCAL .. '/Microsoft/WinGet/Packages'
+  dossiers[packages] = { packages .. '/Autre.Paquet_1', packages .. '/Gyan.FFmpeg_8wekyb3d8bbwe' }
+  dossiers[packages .. '/Autre.Paquet_1'] = {}
+  dossiers[packages .. '/Gyan.FFmpeg_8wekyb3d8bbwe'] = { parent(parent(FFMPEG_WINGET)) }
+end
+local fichiersFfmpeg = { [FFMPEG_WINGET] = true }
+
 mocks.LrPathUtils = {
   child = function(a, b) return a .. '/' .. b end, parent = parent, leafName = feuille,
+  extension = function(p) return feuille(p):match('%.([^.]*)$') or '' end,
+  removeExtension = function(p) return (p:gsub('%.[^./\\]*$', '')) end,
   getStandardFilePath = function(nom) assert(nom == 'home'); return HOME end,
 }
 mocks.LrFileUtils = {
-  exists = function(p) local f = io.open(p, 'rb'); if f then f:close(); return 'file' end; return false end,
+  exists = function(p)
+    if dossiers[p] then return 'directory' end
+    if fichiersFfmpeg[p] and dossiers[parent(parent(parent(p)))] then return 'file' end
+    local f = io.open(p, 'rb'); if f then f:close(); return 'file' end; return false
+  end,
   delete = function(p) os.remove(p); supprimes[#supprimes + 1] = p end,
+  move = function(a, b) assert(os.rename(a, b)) end,
+  directoryEntries = function(p)
+    local i, liste = 0, dossiers[p] or {}
+    return function() i = i + 1; return liste[i] end
+  end,
   createAllDirectories = function() end,
 }
+
+-- Faux ffmpeg et ffprobe : une vidéo dont le contenu mentionne HDR est en HLG, une vidéo CASSEE
+-- ne se convertit pas.
+local commandesFfmpeg = {}
+local function fauxFfmpeg(commande)
+  commandesFfmpeg[#commandesFfmpeg + 1] = commande
+  local journal = commande:match('> "([^"]+)" 2>&1"$')
+  if commande:find('-version', 1, true) then
+    return dossiers[LOCAL .. '/Microsoft/WinGet/Packages'] and 0 or 1
+  end
+  local entree = commande:match(' "([^"]+)" > ') or commande:match('%-i "([^"]+)"')
+  if commande:find('ffprobe.exe', 1, true) then
+    entree = commande:match('nk=1 "([^"]+)"')
+    ecrire(journal, (lire(entree) or ''):find('HDR') and 'arib-std-b67\r\n' or 'bt709\r\n')
+    return 0
+  end
+  entree = commande:match('%-i "([^"]+)"')
+  local sortie = commande:match('"([^"]+)" > "[^"]+" 2>&1"$')
+  local contenu = lire(entree) or ''
+  if contenu:find('CASSEE') then
+    ecrire(journal, '[mov @ 0000] moov atom not found\r\n' .. entree .. ': Invalid data found when processing input\r\n')
+    return 1
+  end
+  ecrire(journal, '')
+  ecrire(sortie, 'MP4(' .. contenu .. ')')
+  return 0
+end
+
 mocks.LrTasks = {
   pcall = pcall,
   sleep = function(s) pauses[#pauses + 1] = s end,
   execute = function(commande)
+    if commande:find('ffmpeg', 1, true) or commande:find('ffprobe', 1, true) then return fauxFfmpeg(commande) end
     commandeExecutee = commande
     local f = io.open(FICHIER_CONNEXION, 'wb')
     f:write('{"client_id":"C","client_secret":"S","refresh_token":"R-OK"}')
@@ -119,6 +175,8 @@ local function routeur(methode, url, corps, entetes)
     if corps:find('ECHEC%-ENVOI') then return rep(503, 'Service Unavailable') end
     google.envois = google.envois + 1
     google['jeton' .. google.envois] = corps
+    google['type' .. google.envois] = entete(entetes, 'X-Goog-Upload-Content-Type')
+    google['delai' .. google.envois] = google.dernierDelai
     return rep(200, 'UP' .. google.envois)
   elseif methode == 'POST' and chemin == 'mediaItems:batchCreate' then
     local d = Json.decoder(corps)
@@ -145,7 +203,10 @@ end
 
 mocks.LrHttp = {
   get = function(url, entetes) return routeur('GET', url, nil, entetes) end,
-  post = function(url, corps, entetes, methode) return routeur(methode or 'POST', url, corps, entetes) end,
+  post = function(url, corps, entetes, methode, delai)
+    google.dernierDelai = delai
+    return routeur(methode or 'POST', url, corps, entetes)
+  end,
   openUrlInBrowser = function(url) ouvertes[#ouvertes + 1] = url end,
 }
 
@@ -154,7 +215,7 @@ Json = require 'Json'
 local Service = require 'ServiceGooglePhotos'
 
 -- Faux export --------------------------------------------------------------------------------
-local function exporter(noms, album, avantRendu)
+local function exporter(noms, album, avantRendu, videos)
   local renditions = {}
   for i, nom in ipairs(noms) do
     local r = { destinationPath = TMP .. '/' .. nom, rendue = false }
@@ -164,7 +225,8 @@ local function exporter(noms, album, avantRendu)
       if avantRendu then avantRendu(i) end
       if nom:find('echec%-rendu') then return false, 'Le filtre de post-traitement n’est pas parvenu à effectuer le rendu.' end
       self.rendue = true
-      local f = io.open(self.destinationPath, 'wb'); f:write('JPEG-' .. nom); f:close()
+      local jpeg = nom:lower():find('%.jpg$')
+      local f = io.open(self.destinationPath, 'wb'); f:write((jpeg and 'JPEG-' or 'VIDEO-') .. nom); f:close()
       return true, self.destinationPath
     end
     function r:uploadFailed(m) self.echec = m end
@@ -172,7 +234,7 @@ local function exporter(noms, album, avantRendu)
   end
   local progression = setmetatable({}, { __index = function() return function() end end })
   local contexte = {
-    propertyTable = { album = album or '' },
+    propertyTable = { album = album or '', videos = videos },
     exportSession = { countRenditions = function() return #renditions end },
     configureProgress = function() return progression end,
     renditions = function()
@@ -299,6 +361,112 @@ verifier('I lots', table.concat(google.lots, ','), '2')
 verifier('I message', confirmations[1] and confirmations[1].texte,
   '2 photos envoyées dans l’album « Filtre ».\n1 photos n’ont pas pu être préparées par Lightroom ou une action '
   .. 'de post-traitement (LR/Mogrify…) : elles n’ont pas été envoyées.')
+
+-- J. Vidéos converties en 1080p : ffmpeg trouvé dans le dossier de winget, une vidéo HDR, une
+-- vidéo illisible. Les photos partent comme avant.
+local function existe(p) return lire(p) ~= nil end
+local function contient(texte, morceau) return (texte or ''):find(morceau, 1, true) ~= nil end
+installerFfmpeg(true)
+google.lots, commandesFfmpeg = {}, {}
+reponses = { 'cancel' }
+local envoisAvant = google.envois
+r = exporter({ 'a.jpg', '20240701T100000-IMG_0001.MOV', '20240702T100000-IMG_0002-HDR.mov', 'b.jpg', 'c-CASSEE.mov' },
+  'Vidéos', nil, 'convertir')
+verifier('J lots', table.concat(google.lots, ','), '4')
+local albumJ = google.contenu[google.albums[#google.albums].id]
+verifier('J noms dans l’album', table.concat(albumJ, ','),
+  'a.jpg,20240701T100000-IMG_0001.mp4,20240702T100000-IMG_0002-HDR.mp4,b.jpg')
+verifier('J contenu converti', google['jeton' .. (envoisAvant + 2)], 'MP4(VIDEO-20240701T100000-IMG_0001.MOV)')
+verifier('J type photo', google['type' .. (envoisAvant + 1)], 'image/jpeg')
+verifier('J type vidéo', google['type' .. (envoisAvant + 2)], 'video/mp4')
+verifier('J délai photo', google['delai' .. (envoisAvant + 1)], 300)
+verifier('J délai vidéo', google['delai' .. (envoisAvant + 2)], 3600)
+-- ffmpeg est trouvé sans rien lancer ; ffprobe puis ffmpeg pour chaque vidéo.
+verifier('J commandes', #commandesFfmpeg, 6)
+local ffprobe = parent(FFMPEG_WINGET) .. '/ffprobe.exe'
+verifier('J ffprobe', commandesFfmpeg[1], '""' .. ffprobe .. '" -v error -select_streams v:0 -show_entries '
+  .. 'stream=color_transfer -of default=nw=1:nk=1 "' .. TMP .. '/google-photos-video-1.MOV" > "'
+  .. TMP .. '/google-photos-video-1-1080p.mp4.txt" 2>&1"')
+verifier('J ffmpeg SDR', commandesFfmpeg[2], '""' .. FFMPEG_WINGET .. '" -nostdin -y -loglevel error -i "'
+  .. TMP .. '/google-photos-video-1.MOV" -map 0:v:0 -map 0:a:0? -map_metadata 0 '
+  .. "-vf \"scale='if(gt(iw,ih),-2,trunc(min(iw,1080)/2)*2)':'if(gt(iw,ih),trunc(min(ih,1080)/2)*2,-2)'\" "
+  .. '-fpsmax 30 -c:v libx264 -preset medium -crf 24 -maxrate 6M -bufsize 12M -pix_fmt yuv420p '
+  .. '-c:a aac -b:a 128k -movflags +faststart "' .. TMP .. '/google-photos-video-1-1080p.mp4" > "'
+  .. TMP .. '/google-photos-video-1-1080p.mp4.txt" 2>&1"')
+verifier('J ffmpeg HDR ramené en SDR', contient(commandesFfmpeg[4], ',zscale=t=linear:npl=100,')
+  and contient(commandesFfmpeg[4], 'tonemap=tonemap=hable') and contient(commandesFfmpeg[4], '-color_trc bt709 '), true)
+verifier('J SDR sans tonemap', contient(commandesFfmpeg[2], 'tonemap'), false)
+verifier('J échec conversion', r[5].echec, 'conversion de la vidéo impossible (ffmpeg : ' .. TMP
+  .. '/google-photos-video-3.mov: Invalid data found when processing input).')
+verifier('J message', confirmations[1] and confirmations[1].texte,
+  '2 photos et 2 vidéos envoyées dans l’album « Vidéos ».\n1 photos n’ont pas pu être envoyées (Lightroom en affiche la liste).')
+local restes = {}
+for _, n in ipairs({ 'google-photos-video-1.MOV', 'google-photos-video-1-1080p.mp4', 'google-photos-video-1-1080p.mp4.txt',
+  'google-photos-video-2.mov', 'google-photos-video-2-1080p.mp4', 'google-photos-video-3.mov',
+  'google-photos-video-3-1080p.mp4', 'google-photos-video-3-1080p.mp4.txt', '20240701T100000-IMG_0001.MOV', 'a.jpg' }) do
+  if existe(TMP .. '/' .. n) then restes[#restes + 1] = n end
+end
+verifier('J fichiers de travail supprimés', table.concat(restes, ','), '')
+
+-- K. Nouvel envoi dans le même album : les vidéos déjà converties et envoyées ne sont ni
+-- rendues ni reconverties.
+google.lots, commandesFfmpeg = {}, {}
+reponses = { 'cancel' }
+r = exporter({ 'a.jpg', '20240701T100000-IMG_0001.MOV', '20240703T100000-IMG_0003.mov' }, 'Vidéos', nil, 'convertir')
+verifier('K sautées', compter(r, 'sautee'), 2)
+verifier('K une conversion', #commandesFfmpeg, 2)
+verifier('K message', confirmations[1] and confirmations[1].texte,
+  '0 photos et 1 vidéos envoyées dans l’album « Vidéos ».\n2 photos y étaient déjà, elles n’ont pas été renvoyées.')
+
+-- L. ffmpeg absent (ni winget ni PATH) : les vidéos échouent avec un message clair, les photos partent.
+installerFfmpeg(false)
+google.lots, commandesFfmpeg = {}, {}
+reponses = { 'cancel' }
+r = exporter({ 'd.jpg', 'v1.mov', 'v2.mov' }, 'Sans ffmpeg', nil, 'convertir')
+verifier('L recherche une fois', #commandesFfmpeg, 1)
+verifier('L échec', r[2].echec, 'ffmpeg introuvable : installe-le (winget install Gyan.FFmpeg) ou choisis '
+  .. 'd’envoyer les vidéos telles que Lightroom les exporte.')
+verifier('L échecs', compter(r, 'echec'), 2)
+verifier('L photo envoyée', table.concat(google.lots, ','), '1')
+verifier('L vidéo gardée sur le disque ? non', existe(TMP .. '/v1.mov'), false)
+
+-- M. Vidéos envoyées telles que Lightroom les exporte : pas de ffmpeg, nom et type d'origine.
+google.lots, commandesFfmpeg = {}, {}
+reponses = { 'cancel' }
+envoisAvant = google.envois
+r = exporter({ 'e.jpg', 'clip.MOV' }, 'Telles', nil, 'telles')
+verifier('M pas de ffmpeg', #commandesFfmpeg, 0)
+verifier('M noms', table.concat(google.contenu[google.albums[#google.albums].id], ','), 'e.jpg,clip.MOV')
+verifier('M type', google['type' .. (envoisAvant + 2)], 'video/quicktime')
+verifier('M contenu', google['jeton' .. (envoisAvant + 2)], 'VIDEO-clip.MOV')
+
+-- N. Réglages imposés à Lightroom par les choix de la section « Google Photos ».
+local p = { taille = '2048', videos = 'convertir', LR_size_maxWidth = 4096, LR_size_resizeType = 'wh', LR_size_doConstrain = false }
+Service.updateExportSettings(p)
+verifier('N taille', string.format('%s %s %s %s %s %s', tostring(p.LR_size_doConstrain), p.LR_size_resizeType,
+  p.LR_size_maxWidth, p.LR_size_maxHeight, p.LR_size_units, tostring(p.LR_size_doNotEnlarge)),
+  'true longEdge 2048 2048 pixels true')
+verifier('N vidéos converties', string.format('%s %s %s %s', tostring(p.LR_includeVideoFiles),
+  p.LR_export_videoFileHandling, p.LR_export_videoFormat, p.LR_export_videoPreset), 'true include original original')
+p = { taille = 'originale', videos = 'non', LR_size_doConstrain = true, LR_size_maxWidth = 4096 }
+Service.updateExportSettings(p)
+verifier('N originale', tostring(p.LR_size_doConstrain) .. ' ' .. p.LR_size_maxWidth, 'false 4096')
+verifier('N sans vidéos', tostring(p.LR_includeVideoFiles) .. ' ' .. p.LR_export_videoFileHandling, 'false exclude')
+p = { LR_size_doConstrain = true, LR_size_maxWidth = 1500, LR_size_resizeType = 'wh', LR_export_videoFormat = 'h264' }
+Service.updateExportSettings(p)   -- préréglage antérieur : champs absents
+verifier('N réglages Lightroom gardés', tostring(p.LR_size_doConstrain) .. ' ' .. p.LR_size_maxWidth .. ' '
+  .. p.LR_size_resizeType .. ' ' .. p.LR_export_videoFileHandling, 'true 1500 wh exclude')
+p = { videos = 'telles', LR_export_videoFormat = 'h264' }
+Service.updateExportSettings(p)
+verifier('N vidéos telles', p.LR_export_videoFileHandling .. ' ' .. p.LR_export_videoFormat, 'include h264')
+-- Les choix faits dans la boîte d'export se reportent tout de suite dans les sections de Lightroom.
+local observateurs = {}
+p = { addObserver = function(self, cle, f) observateurs[cle] = f end }
+Service.startDialog(p)
+p.taille = '1600'; observateurs.taille(p, 'taille', '1600')
+verifier('N observateur taille', p.LR_size_maxWidth, 1600)
+p.videos = 'convertir'; observateurs.videos(p, 'videos', 'convertir')
+verifier('N observateur vidéos', p.LR_export_videoFormat, 'original')
 
 print(string.format('%d vérifications, %d échecs', nb, echecs))
 os.exit(echecs == 0 and 0 or 1)

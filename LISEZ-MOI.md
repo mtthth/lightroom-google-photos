@@ -100,7 +100,18 @@ Si le module signale un historique non initialisé, recharge Deduplicate avant d
 
 Dans la boîte d'export de Lightroom, le service « Google Photos » envoie les photos exportées dans un album, par l'API
 officielle. Préréglage fourni : « Google Photos 4K » (JPEG de 4096 pixels, qualité 75, mêmes noms de fichier que les
-exports habituels).
+exports habituels, vidéos converties en 1080p).
+
+La section « Google Photos » de la boîte d'export règle aussi :
+
+- **Photos** : grand côté limité à 4096, 2048 ou 1600 pixels (sans agrandir), taille d'origine, ou « Selon
+  Dimensionnement de l'image » pour garder les réglages de cette section de Lightroom (choix par défaut des
+  préréglages antérieurs). Le choix se reporte dans la section « Dimensionnement de l'image ».
+- **Vidéos** : non envoyées (par défaut), converties en 1080p léger, ou envoyées telles que Lightroom les exporte
+  (section « Vidéo »). La conversion demande ffmpeg (`winget install Gyan.FFmpeg`) : MP4 H.264 et AAC 128 kbit/s,
+  petit côté ramené à 1080 pixels, 30 images/s et 6 Mbit/s au plus, date de prise de vue et rotation conservées,
+  vidéos HDR d'iPhone ramenées en SDR. Lightroom fournit pour cela le fichier d'origine : les découpes faites dans
+  Lightroom ne sont pas appliquées. Dans l'album, la vidéo garde le nom d'export avec l'extension `.mp4`.
 
 1. **Une fois** : créer un projet Google Cloud, activer « Photos Library API », créer un client OAuth « Application de
    bureau » et poser `client_secret_….json` dans ce dossier (les étapes sont en tête de `connexion-google-photos.mjs`).
@@ -124,7 +135,8 @@ node tests/lancer.mjs --mutants   # puis vérifie quatre régressions de recréa
 Ils tournent sous Windows, hors de Lightroom, avec `texlua` (le Lua de MiKTeX ; variable `TEXLUA` pour un autre
 chemin) et un faux Lightroom. Ils n’ouvrent pas Chrome, n’appellent pas Google et n’utilisent pas ton catalogue
 ni tes exports personnels. Les suites Lua vérifient la recréation des albums, les exclusions de l’historique,
-les empreintes de fichiers, le service d’export et le JSON. Les tests JavaScript vérifient les règles du rapport
+les empreintes de fichiers, le service d’export (taille des photos, conversion et envoi des vidéos avec un faux
+ffmpeg) et le JSON. Les tests JavaScript vérifient les règles du rapport
 des rafales à blanc et la reprise des exports incrémentaux. Les tests de Deduplicate se lancent depuis son
 propre dépôt ; aucun checkout de Deduplicate n’est nécessaire pour tester Google Photos.
 Les suites JavaScript couvrent aussi la reprise des conversions vidéo et l'arrêt des téléchargements sur erreur.
@@ -172,7 +184,7 @@ Les suites JavaScript couvrent aussi la reprise des conversions vidéo et l'arr�
 | `chrome.mjs`, `csv.mjs` | Code commun aux deux scripts |
 | `connexion-google-photos.mjs` | Connexion à Google pour l'export « Google Photos » (lancé par le module au besoin) |
 | `rafales-a-blanc.mjs`, `rafales-regles.mjs` | Rapport HTML des rafales d'un dossier et ses règles, sans rien modifier |
-| `albums-google-photos.lrplugin` | Plugin Lightroom Albums Google Photos : recréation des albums (`RecreerAlbums.lua`, `Correspondance.lua`, `Epoques.lua`, `Noms.lua`) et export (`ServiceGooglePhotos.lua`, `GooglePhotos.lua`, `Json.lua`, `presets\`) |
+| `albums-google-photos.lrplugin` | Plugin Lightroom Albums Google Photos : recréation des albums (`RecreerAlbums.lua`, `Correspondance.lua`, `Epoques.lua`, `Noms.lua`) et export (`ServiceGooglePhotos.lua`, `GooglePhotos.lua`, `Videos.lua`, `Json.lua`, `presets\`) |
 | Dépôt voisin [`lightroom-deduplicate`](https://github.com/mtthth/lightroom-deduplicate) | Plugin autonome de fusion des doublons et de réduction des rafales |
 | `tests\` | Tests autonomes de Google Photos, hors de Lightroom (`node tests/lancer.mjs`) |
 | `albums-tous.csv`, `photos-albums-tous.csv` | Export des albums (inutile d'y toucher) |

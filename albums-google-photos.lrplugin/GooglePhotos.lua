@@ -42,14 +42,14 @@ local function lireFichier(chemin)
 end
 
 -- Requête HTTP, avec deux nouvelles tentatives si Google ne répond pas, est indisponible ou
--- demande de ralentir. Renvoie le corps de la réponse et le statut HTTP.
-local function requete(methode, adresse, corps, entetes)
+-- demande de ralentir. Renvoie le corps de la réponse et le statut HTTP. delai : en secondes.
+local function requete(methode, adresse, corps, entetes, delai)
   for essai = 1, 3 do
     local reponse, infos
     if methode == 'GET' then
       reponse, infos = LrHttp.get(adresse, entetes, 120)
     else
-      reponse, infos = LrHttp.post(adresse, corps, entetes, methode, 300)
+      reponse, infos = LrHttp.post(adresse, corps, entetes, methode, delai or 300)
     end
     local statut = infos and infos.status
     local panne = not infos or infos.error
@@ -175,16 +175,31 @@ function Client:nomsDansAlbum(idAlbum)
   return noms
 end
 
--- Envoie un fichier JPEG. Renvoie le jeton d'envoi à passer ensuite à ajouterAAlbum.
+-- Type MIME annoncé à Google, d'après l'extension du fichier.
+local TYPES = {
+  jpg = 'image/jpeg', jpeg = 'image/jpeg',
+  mp4 = 'video/mp4', m4v = 'video/x-m4v', mov = 'video/quicktime', avi = 'video/x-msvideo',
+  mts = 'video/mp2t', m2ts = 'video/mp2t', ['3gp'] = 'video/3gpp', mpg = 'video/mpeg', mpeg = 'video/mpeg',
+}
+
+function M.typeMime(nom)
+  return TYPES[(nom:match('%.([^.]+)$') or ''):lower()]
+end
+
+-- Envoie un fichier (photo JPEG ou vidéo). Renvoie le jeton d'envoi à passer ensuite à ajouterAAlbum.
 function Client:envoyer(chemin)
   local octets = lireFichier(chemin)
   if not octets then error('fichier illisible : ' .. chemin, 0) end
-  local reponse, statut = requete('POST', API .. 'uploads', octets, {
+  local entetes = {
     { field = 'Authorization', value = 'Bearer ' .. self:jeton() },
     { field = 'Content-Type', value = 'application/octet-stream' },
-    { field = 'X-Goog-Upload-Content-Type', value = 'image/jpeg' },
     { field = 'X-Goog-Upload-Protocol', value = 'raw' },
-  })
+  }
+  local typeMime = M.typeMime(chemin)
+  if typeMime then table.insert(entetes, { field = 'X-Goog-Upload-Content-Type', value = typeMime }) end
+  -- Une vidéo peut peser plusieurs centaines de mégaoctets.
+  local delai = (typeMime or ''):find('^image/') and 300 or 3600
+  local reponse, statut = requete('POST', API .. 'uploads', octets, entetes, delai)
   if statut ~= 200 or not reponse or reponse == '' then error(messageErreur(reponse, statut), 0) end
   return reponse
 end
