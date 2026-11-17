@@ -31,3 +31,8 @@ node_modules/
 # Archives et fichiers de travail de la séparation du plugin Deduplicate.
 audit-fusion-temp/
 *.lrplugin.zip
+
+# Corrections de dates du catalogue (noms de fichiers et chemins personnels).
+corrections-dates-*/
+sans-date-*.csv
+verification-dates-*.csv
