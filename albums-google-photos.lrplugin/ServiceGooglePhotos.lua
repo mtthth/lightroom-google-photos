@@ -5,8 +5,9 @@
 -- Exporter → « Google Photos 4K » (préréglage du dossier presets, auquel on peut ajouter des
 -- actions LR/Mogrify : bordure, textes…).
 --
--- L'album porte le nom choisi dans la boîte d'export ou, à défaut, celui de la collection (ou du
--- dossier) affichée dans Lightroom. Si ce service a déjà créé un album de ce nom, il le complète :
+-- À l'ouverture de la boîte d'export, le nom de l'album est prérempli avec celui de la collection
+-- (ou du dossier) affichée dans Lightroom, et reste modifiable. S'il est laissé vide, ce nom est repris
+-- à l'envoi, ou demandé. Si ce service a déjà créé un album de ce nom, il le complète :
 -- les photos dont le nom de fichier y figure déjà ne sont ni rendues ni renvoyées.
 -- Les actions de post-traitement (LR/Mogrify…) s'appliquent avant l'envoi.
 --
@@ -14,6 +15,7 @@
 -- section « Dimensionnement de l'image » de Lightroom.
 -- Vidéos : non envoyées, converties en 1080p léger par ffmpeg (voir Videos.lua), ou envoyées telles
 -- que Lightroom les exporte (section « Vidéo »).
+-- Les textes affichés suivent la langue choisie dans les réglages du module (voir Langue.lua).
 
 local LrApplication = import 'LrApplication'
 local LrBinding = import 'LrBinding'
@@ -25,18 +27,21 @@ local LrTasks = import 'LrTasks'
 local LrView = import 'LrView'
 
 local GooglePhotos = require 'GooglePhotos'
+local Langue = require 'Langue'
 local Videos = require 'Videos'
+local T = Langue.t
 
 local function trim(texte)
   return (texte:gsub('^%s+', ''):gsub('%s+$', ''))
 end
 
 -- Nom de la collection ou du dossier affiché, si une seule source est sélectionnée.
--- Les sources spéciales (« Toutes les photos »…) n'ont pas de nom utilisable.
+-- Les sources spéciales (« Toutes les photos »…) n'ont pas de nom utilisable. pcall plutôt que
+-- LrTasks.pcall : la boîte d'export l'appelle hors d'une tâche, et getName ne cède pas la main.
 local function nomSourceActive()
-  local sources = LrApplication.activeCatalog():getActiveSources()
-  if #sources ~= 1 then return nil end
-  local ok, nom = LrTasks.pcall(function() return sources[1]:getName() end)
+  local okSources, sources = pcall(function() return LrApplication.activeCatalog():getActiveSources() end)
+  if not okSources or type(sources) ~= 'table' or #sources ~= 1 then return nil end
+  local ok, nom = pcall(function() return sources[1]:getName() end)
   if ok and type(nom) == 'string' and trim(nom) ~= '' then return trim(nom) end
   return nil
 end
@@ -46,14 +51,15 @@ local function demanderNomAlbum(contexte)
   local proprietes = LrBinding.makePropertyTable(contexte)
   proprietes.nom = ''
   local reponse = LrDialogs.presentModalDialog {
-    title = 'Album Google Photos',
+    title = T('Album Google Photos', 'Google Photos album'),
     contents = f:column {
       bind_to_object = proprietes,
       spacing = f:control_spacing(),
-      f:static_text { title = 'Dans quel album Google Photos envoyer les photos ?' },
+      f:static_text { title = T('Dans quel album Google Photos envoyer les photos ?',
+        'Which Google Photos album should the photos go to?') },
       f:edit_field { value = LrView.bind('nom'), width_in_chars = 40, immediate = true },
     },
-    actionVerb = 'Envoyer',
+    actionVerb = T('Envoyer', 'Upload'),
   }
   local nom = trim(proprietes.nom or '')
   if reponse ~= 'ok' or nom == '' then return nil end
@@ -65,32 +71,45 @@ end
 local function connecter()
   local client = GooglePhotos.ouvrir()
   if client then return client end
-  local choix = LrDialogs.confirm('Connexion à Google Photos',
-    'Lightroom n’est pas encore connecté à ton compte Google Photos, ou la connexion a expiré.\n\n'
+  local choix = LrDialogs.confirm(T('Connexion à Google Photos', 'Connecting to Google Photos'),
+    T('Lightroom n’est pas encore connecté à ton compte Google Photos, ou la connexion a expiré.\n\n'
     .. 'Ton navigateur va s’ouvrir sur la page de Google. Si Google prévient que l’application '
     .. 'n’est pas validée : « Paramètres avancés », puis « Accéder à … ». Laisse cochées les deux '
     .. 'autorisations demandées.\n\nLightroom attend la fin de la connexion (10 minutes au plus).',
-    'Se connecter', 'Annuler')
+    'Lightroom is not connected to your Google Photos account yet, or the connection has expired.\n\n'
+    .. 'Your browser will open on Google’s page. If Google warns that the app has not been verified: '
+    .. '“Advanced”, then “Go to …”. Leave both requested permissions ticked.\n\n'
+    .. 'Lightroom waits for the connection to finish (10 minutes at most).'),
+    T('Se connecter', 'Connect'), T('Annuler', 'Cancel'))
   if choix ~= 'ok' then return nil end
   GooglePhotos.lancerConnexion()
   client = GooglePhotos.ouvrir()
-  if not client then error('la connexion semble faite, mais Google la refuse. Réessaie l’export.', 0) end
+  if not client then
+    error(T('la connexion semble faite, mais Google la refuse. Réessaie l’export.',
+      'the connection seems complete, but Google refuses it. Try the export again.'), 0)
+  end
   return client
 end
 
-local TAILLES = {
-  { title = 'Selon « Dimensionnement de l’image »', value = 'lightroom' },
-  { title = 'Taille d’origine', value = 'originale' },
-  { title = '4096 pixels (4K)', value = '4096' },
-  { title = '2048 pixels', value = '2048' },
-  { title = '1600 pixels (léger)', value = '1600' },
-}
+-- Fonctions : les titres sont traduits à l'ouverture de la boîte d'export.
+local function tailles()
+  return {
+    { title = T('Selon « Dimensionnement de l’image »', 'As in “Image Sizing”'), value = 'lightroom' },
+    { title = T('Taille d’origine', 'Original size'), value = 'originale' },
+    { title = '4096 pixels (4K)', value = '4096' },
+    { title = '2048 pixels', value = '2048' },
+    { title = T('1600 pixels (léger)', '1600 pixels (light)'), value = '1600' },
+  }
+end
 
-local VIDEOS = {
-  { title = 'Ne pas les envoyer', value = 'non' },
-  { title = 'Converties en 1080p léger (ffmpeg)', value = 'convertir' },
-  { title = 'Telles que Lightroom les exporte (section « Vidéo »)', value = 'telles' },
-}
+local function videos()
+  return {
+    { title = T('Ne pas les envoyer', 'Do not upload them'), value = 'non' },
+    { title = T('Converties en 1080p léger (ffmpeg)', 'Converted to light 1080p (ffmpeg)'), value = 'convertir' },
+    { title = T('Telles que Lightroom les exporte (section « Vidéo »)', 'As exported by Lightroom (“Video” section)'),
+      value = 'telles' },
+  }
+end
 
 -- Réglages intégrés de Lightroom (préfixe LR_) imposés par le choix de taille des photos.
 local function reglerDimensions(p)
@@ -126,8 +145,12 @@ local function updateExportSettings(p)
   reglerVideos(p)
 end
 
--- Les sections de Lightroom suivent les choix faits dans la section « Google Photos ».
+-- Le nom de l'album est prérempli avec celui de la collection ou du dossier affiché, pour qu'il
+-- suffise de le modifier au besoin. Sans source nommée (« Toutes les photos »…), le champ garde sa
+-- valeur. Les sections de Lightroom suivent les choix faits dans la section « Google Photos ».
 local function startDialog(p)
+  local nom = nomSourceActive()
+  if nom then p.album = nom end
   p:addObserver('taille', function() pcall(reglerDimensions, p) end)
   p:addObserver('videos', function() pcall(reglerVideos, p) end)
 end
@@ -140,44 +163,50 @@ local function sectionsForTopOfDialog(f, proprietes)
       synopsis = LrView.bind {
         key = 'album',
         transform = function(album)
-          return (album and album ~= '') and ('Album « ' .. album .. ' »') or 'Album : nom de la collection'
+          return (album and album ~= '') and (T('Album « ', 'Album “') .. album .. T(' »', '”'))
+            or T('Album : nom de la collection', 'Album: collection name')
         end,
       },
       f:row {
-        f:static_text { title = 'Album :', alignment = 'right', width = etiquette },
+        f:static_text { title = T('Album :', 'Album:'), alignment = 'right', width = etiquette },
         f:edit_field { value = LrView.bind('album'), width_in_chars = 40, immediate = true },
       },
       f:row {
         f:static_text { title = '', width = etiquette },
         f:static_text {
-          title = 'Laisser vide pour prendre le nom de la collection ou du dossier affiché.\n'
+          title = T('Prérempli avec le nom de la collection ou du dossier affiché : modifiez-le au besoin.\n'
             .. 'Un album déjà créé par ce service est complété, sans renvoyer les photos qu’il contient.',
+            'Prefilled with the name of the collection or folder shown: change it if needed.\n'
+            .. 'An album already created by this service is completed, without re-uploading the photos it contains.'),
           height_in_lines = 2,
         },
       },
       f:row {
-        f:static_text { title = 'Photos :', alignment = 'right', width = etiquette },
-        f:popup_menu { value = LrView.bind('taille'), items = TAILLES },
-        f:static_text { title = 'grand côté au plus, sans agrandir' },
+        f:static_text { title = T('Photos :', 'Photos:'), alignment = 'right', width = etiquette },
+        f:popup_menu { value = LrView.bind('taille'), items = tailles() },
+        f:static_text { title = T('grand côté au plus, sans agrandir', 'long edge at most, never enlarged') },
       },
       f:row {
-        f:static_text { title = 'Vidéos :', alignment = 'right', width = etiquette },
-        f:popup_menu { value = LrView.bind('videos'), items = VIDEOS },
+        f:static_text { title = T('Vidéos :', 'Videos:'), alignment = 'right', width = etiquette },
+        f:popup_menu { value = LrView.bind('videos'), items = videos() },
       },
       f:row {
         f:static_text { title = '', width = etiquette },
         f:static_text {
-          title = 'Conversion : MP4 H.264, petit côté 1080 pixels, 30 images/s, 6 Mbit/s au plus ; '
+          title = T('Conversion : MP4 H.264, petit côté 1080 pixels, 30 images/s, 6 Mbit/s au plus ; '
             .. 'HDR ramené en SDR.\nDemande ffmpeg (winget install Gyan.FFmpeg). Les découpes faites '
             .. 'dans Lightroom ne sont pas appliquées.',
+            'Conversion: MP4 H.264, short edge 1080 pixels, 30 fps, 6 Mbit/s at most; HDR mapped to SDR.\n'
+            .. 'Requires ffmpeg (winget install Gyan.FFmpeg). Trims made in Lightroom are not applied.'),
           height_in_lines = 2,
         },
       },
       f:row {
         f:static_text { title = '', width = etiquette },
         f:static_text {
-          title = GooglePhotos.connexionEnregistree() and 'Connecté à Google Photos.'
-            or 'Pas encore connecté : la connexion se fera au premier envoi.',
+          title = GooglePhotos.connexionEnregistree() and T('Connecté à Google Photos.', 'Connected to Google Photos.')
+            or T('Pas encore connecté : la connexion se fera au premier envoi.',
+              'Not connected yet: you will connect on the first upload.'),
         },
       },
     },
@@ -187,7 +216,7 @@ end
 local function envoyer(contexte, exportContext)
   local nbPhotos = exportContext.exportSession:countRenditions()
   local progression = exportContext:configureProgress {
-    title = string.format('Envoi de %d photos vers Google Photos', nbPhotos),
+    title = string.format(T('Envoi de %d photos vers Google Photos', 'Uploading %d photos to Google Photos'), nbPhotos),
   }
 
   local modeVideos = exportContext.propertyTable.videos or 'non'
@@ -200,7 +229,7 @@ local function envoyer(contexte, exportContext)
   end
 
   -- Album : celui que ce service a déjà créé sous ce nom, sinon un nouveau.
-  progression:setCaption('Recherche de l’album « ' .. titre .. ' »…')
+  progression:setCaption(T('Recherche de l’album « ', 'Looking for the album “') .. titre .. T(' »…', '”…'))
   local album = client:trouverAlbum(titre)
   local deja = {}
   if album then
@@ -228,8 +257,9 @@ local function envoyer(contexte, exportContext)
   local function convertirVideo(chemin)
     if ffmpeg == nil then ffmpeg = Videos.trouverFfmpeg() or false end
     if not ffmpeg then
-      return nil, 'ffmpeg introuvable : installe-le (winget install Gyan.FFmpeg) ou choisis d’envoyer '
-        .. 'les vidéos telles que Lightroom les exporte.'
+      return nil, T('ffmpeg introuvable : installe-le (winget install Gyan.FFmpeg) ou choisis d’envoyer '
+        .. 'les vidéos telles que Lightroom les exporte.', 'ffmpeg not found: install it (winget install Gyan.FFmpeg) '
+        .. 'or choose to upload videos as exported by Lightroom.')
     end
     nbConversions = nbConversions + 1
     local dossier = LrPathUtils.parent(chemin)
@@ -239,7 +269,7 @@ local function envoyer(contexte, exportContext)
     local sortie = LrPathUtils.child(dossier, string.format('google-photos-video-%d-1080p.mp4', nbConversions))
     LrFileUtils.delete(source)
     LrTasks.pcall(LrFileUtils.move, chemin, source)
-    if LrFileUtils.exists(source) ~= 'file' then return nil, 'vidéo exportée introuvable : ' .. chemin end
+    if LrFileUtils.exists(source) ~= 'file' then return nil, T('vidéo exportée introuvable : ', 'exported video not found: ') .. chemin end
     local ok, erreur = Videos.convertir(ffmpeg, source, sortie)
     LrFileUtils.delete(source)
     if not ok then return nil, erreur end
@@ -251,7 +281,7 @@ local function envoyer(contexte, exportContext)
   local nbEnvoyees, nbVideos, nbDeja, nbEchecs, nbNonPreparees = 0, 0, 0, 0, 0
   local function ajouterEnAttente()
     if #enAttente == 0 then return end
-    progression:setCaption('Ajout des photos à l’album…')
+    progression:setCaption(T('Ajout des photos à l’album…', 'Adding the photos to the album…'))
     local erreurs = client:ajouterAAlbum(album.id, enAttente)
     for i, e in ipairs(enAttente) do
       if erreurs[i] then
@@ -275,12 +305,12 @@ local function envoyer(contexte, exportContext)
       if rendue then
         local nom, fichier, erreur = nomEnvoye(chemin), chemin, nil
         if aConvertir(chemin) then
-          progression:setCaption(string.format('Conversion de %s en 1080p (%d / %d)', nom, i, nbPhotos))
+          progression:setCaption(string.format(T('Conversion de %s en 1080p (%d / %d)', 'Converting %s to 1080p (%d / %d)'), nom, i, nbPhotos))
           local ok, resultat, message = LrTasks.pcall(convertirVideo, chemin)
           if ok then fichier, erreur = resultat, message else fichier, erreur = nil, tostring(resultat) end
         end
         if fichier then
-          progression:setCaption(string.format('Envoi de %s (%d / %d)', nom, i, nbPhotos))
+          progression:setCaption(string.format(T('Envoi de %s (%d / %d)', 'Uploading %s (%d / %d)'), nom, i, nbPhotos))
           local envoye, resultat = LrTasks.pcall(function() return client:envoyer(fichier) end)
           if envoye then
             table.insert(enAttente, { jeton = resultat, nom = nom, rendition = rendition, video = estVideo(chemin) })
@@ -306,21 +336,27 @@ local function envoyer(contexte, exportContext)
   ajouterEnAttente()
   progression:done()
 
-  local message = string.format('%d photos envoyées dans l’album « %s ».', nbEnvoyees, titre)
+  local message = string.format(T('%d photos envoyées dans l’album « %s ».', '%d photos uploaded to the album “%s”.'),
+    nbEnvoyees, titre)
   if nbVideos > 0 then
-    message = string.format('%d photos et %d vidéos envoyées dans l’album « %s ».', nbEnvoyees - nbVideos, nbVideos, titre)
+    message = string.format(T('%d photos et %d vidéos envoyées dans l’album « %s ».',
+      '%d photos and %d videos uploaded to the album “%s”.'), nbEnvoyees - nbVideos, nbVideos, titre)
   end
   if nbDeja > 0 then
-    message = message .. string.format('\n%d photos y étaient déjà, elles n’ont pas été renvoyées.', nbDeja)
+    message = message .. string.format(T('\n%d photos y étaient déjà, elles n’ont pas été renvoyées.',
+      '\n%d photos were already there and were not uploaded again.'), nbDeja)
   end
   if nbNonPreparees > 0 then
-    message = message .. string.format('\n%d photos n’ont pas pu être préparées par Lightroom ou une action '
-      .. 'de post-traitement (LR/Mogrify…) : elles n’ont pas été envoyées.', nbNonPreparees)
+    message = message .. string.format(T('\n%d photos n’ont pas pu être préparées par Lightroom ou une action '
+      .. 'de post-traitement (LR/Mogrify…) : elles n’ont pas été envoyées.', '\n%d photos could not be rendered by '
+      .. 'Lightroom or a post-processing action (LR/Mogrify…): they were not uploaded.'), nbNonPreparees)
   end
   if nbEchecs > 0 then
-    message = message .. string.format('\n%d photos n’ont pas pu être envoyées (Lightroom en affiche la liste).', nbEchecs)
+    message = message .. string.format(T('\n%d photos n’ont pas pu être envoyées (Lightroom en affiche la liste).',
+      '\n%d photos could not be uploaded (Lightroom lists them).'), nbEchecs)
   end
-  if LrDialogs.confirm('Google Photos', message, 'Ouvrir l’album', 'Fermer') == 'ok' and album.productUrl then
+  if LrDialogs.confirm('Google Photos', message, T('Ouvrir l’album', 'Open the album'), T('Fermer', 'Close')) == 'ok'
+    and album.productUrl then
     LrHttp.openUrlInBrowser(album.productUrl)
   end
 end
@@ -328,7 +364,7 @@ end
 local function processRenderedPhotos(contexte, exportContext)
   local ok, erreur = LrTasks.pcall(envoyer, contexte, exportContext)
   if not ok then
-    LrDialogs.message('Envoi vers Google Photos impossible', tostring(erreur), 'critical')
+    LrDialogs.message(T('Envoi vers Google Photos impossible', 'Upload to Google Photos failed'), tostring(erreur), 'critical')
   end
 end
 

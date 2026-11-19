@@ -4,12 +4,12 @@ Recrée dans Lightroom Classic les albums de Google Photos (sans passer par Take
 
 - **Google Photos - albums** : une collection par album, rangée par année
   (`2025 / 2025-07-24 – Week-end à Lyon`).
-- **Google Photos - époques** : pour chaque album, toutes les photos du catalogue prises entre sa première et sa
+- **Google Photos - sessions** : pour chaque album, toutes les photos du catalogue prises entre sa première et sa
   dernière photo, plus des collections « Intercalaire jusqu'au… » dans les trous entre deux périodes.
 
 Les photos de Google Photos qui ne sont dans **aucun album** sont rangées dans une collection `(hors album)` à l'intérieur
 de chaque année (`Google Photos - albums / 2019 / (hors album)`, année de la photo, ou `Sans date`). Comme toutes les
-photos du catalogue prises pendant une époque en font partie, elles se retrouvent aussi dans la bonne époque.
+photos du catalogue prises pendant une session en font partie, elles se retrouvent aussi dans la bonne session.
 
 La date du nom est celle du titre de l'album s'il en porte une (`110909. Mariage`, `2025.07.24 Lyon…`,
 `20260423. Plage`…), sinon celle de sa première photo. L'ancien préfixe de date est retiré du titre.
@@ -20,6 +20,14 @@ La date du nom est celle du titre de l'album s'il en porte une (`110909. Mariage
 - Le module Lightroom : Fichier → Gestionnaire de modules externes → Ajouter → dossier `albums-google-photos.lrplugin`.
 - La première fois, `export-albums.mjs` ouvre une fenêtre Chrome : connecte-toi à ton compte Google
   (la session est conservée dans un profil dédié, `%LOCALAPPDATA%\lightroom-google-photos\chrome-profile`).
+- La langue de l'interface (français par défaut, ou anglais) se choisit dans Fichier → Gestionnaire de modules
+  externes → Albums Google Photos. Elle vaut pour les dialogues et l'export dès la commande suivante ; le titre du
+  menu suit la langue de Lightroom. Les noms des collections créées ne changent pas.
+
+**Mise à jour depuis la version 1.0.** L'ensemble « Google Photos - époques » s'appelle désormais
+« Google Photos - sessions ». Il est renommé au premier passage de « Recréer les albums Google Photos… », et ses
+collections sont complétées comme avant. Si les deux ensembles existent déjà, aucun n'est renommé : supprime
+l'ancien à la main.
 
 **Mise à jour depuis une version antérieure à 1.0 (26.10.0 ou avant).** L'identifiant du module est devenu
 `io.github.mtthth.albumsgooglephotos` (il était `fr.matthieu.albumsgooglephotos`). Lightroom le voit comme un
@@ -80,7 +88,7 @@ Quand Google Photos contient une version réduite d'une photo dont Lightroom a l
 retrouve l'original et ne télécharge rien : par le nom de fichier (en ignorant la date en préfixe, les dimensions
 `-4032 x 3024`, `__4096px`, `-2`, `~2`, l'extension), puis, pour les noms que le téléphone aurait changés, par
 l'heure de prise de vue à la seconde. Si Lightroom a un RAF et un JPEG du même cliché, c'est celui qui a la même
-extension que le fichier Google qui est mis dans la collection d'album (les deux sont dans l'époque).
+extension que le fichier Google qui est mis dans la collection d'album (les deux sont dans la session).
 
 ## Déduplication
 
@@ -100,7 +108,7 @@ projets/
 Ajoute les deux dossiers `.lrplugin` au gestionnaire de modules externes de Lightroom et active-les.
 Après leur mise à jour, redémarre Lightroom. Deduplicate initialise et synchronise seul l’historique commun
 `lightroom-google-photos/photos-traitees.txt`, y compris après Annuler / Rétablir. Google Photos le lit pour
-que les photos écartées ne réapparaissent pas dans les albums, les époques ou les téléchargements.
+que les photos écartées ne réapparaissent pas dans les albums, les sessions ou les téléchargements.
 Si tu ajoutes Deduplicate après coup, lance-le une fois avant de recréer les albums, pour qu'il crée ce fichier.
 Si le module signale un historique non initialisé (fichier présent mais pas encore repris par Deduplicate),
 recharge Deduplicate avant de recréer les albums.
@@ -125,8 +133,8 @@ La section « Google Photos » de la boîte d'export règle aussi :
 1. **Une fois** : créer un projet Google Cloud, activer « Photos Library API », créer un client OAuth « Application de
    bureau » et poser `client_secret_….json` dans ce dossier (les étapes sont en tête de `connexion-google-photos.mjs`).
    Ce fichier est un secret : il est exclu de git.
-2. Sélectionner les photos d'une collection, puis Fichier → Exporter → « Google Photos 4K ». L'album porte le nom
-   de la collection affichée (ou celui saisi dans la boîte d'export).
+2. Sélectionner les photos d'une collection, puis Fichier → Exporter → « Google Photos 4K ». Le nom de l'album est
+   prérempli avec celui de la collection ou du dossier affiché : modifie-le au besoin dans la boîte d'export.
 3. Au premier envoi, Lightroom ouvre le navigateur pour la connexion à Google. En mode « Test », Google coupe la
    connexion au bout de 7 jours : ajoute ton adresse comme utilisateur test ; Lightroom propose de se reconnecter.
 
@@ -138,7 +146,7 @@ Depuis mars 2025, l'API ne permet de compléter que les albums créés par l'app
 ```
 node tests/lancer.mjs             # quatre suites Lua et quatre suites JavaScript
 node tests/lancer.mjs --js        # JavaScript seul, sans MiKTeX
-node tests/lancer.mjs --mutants   # puis vérifie cinq régressions de recréation des albums
+node tests/lancer.mjs --mutants   # puis vérifie six régressions de recréation des albums
 ```
 
 Ils tournent sous Windows, hors de Lightroom, avec `texlua` (le Lua de MiKTeX ; variable `TEXLUA` pour un autre
@@ -166,7 +174,7 @@ Les suites JavaScript couvrent aussi la reprise des conversions vidéo et l'arr�
   chemin du fichier converti dans la dernière colonne de la ligne correspondante de
   `photos-albums-tous-manquantes\telechargements.csv` et relancer le module.
 - **Albums plus longs que 45 jours** (album annuel, album de plusieurs années…) : ils ont leur collection d'album mais
-  ne créent ni époque ni période intercalaire. La limite est la constante `DUREE_MAX_EPOQUE_JOURS` en haut de
+  ne créent ni session ni période intercalaire. La limite est la constante `DUREE_MAX_EPOQUE_JOURS` en haut de
   `albums-google-photos.lrplugin\RecreerAlbums.lua` (`nil` pour aucune limite).
 - **Deux albums de même titre** portent le même nom de collection : le second est suffixé « (2) ».
   Ils sont distingués par leur identifiant Google (les anciens CSV sans identifiant restent lisibles).
@@ -174,7 +182,7 @@ Les suites JavaScript couvrent aussi la reprise des conversions vidéo et l'arr�
   module pour les recréer : la mise à jour complète les collections existantes sans en retirer les photos.
 - Les noms de collection ne peuvent pas contenir certains caractères : le module les remplace par « - » si
   Lightroom refuse le titre. Si plusieurs titres deviennent identiques après ce remplacement, un suffixe
-  « (2) », « (3) »… les distingue dans les albums comme dans les époques.
+  « (2) », « (3) »… les distingue dans les albums comme dans les sessions.
 - **Conversions vidéo** : `convertir-videos.mjs` conserve dans le dossier de sortie un fichier `conversions.json`
   qui associe chaque source à sa vidéo convertie. Garde ce fichier pour reprendre les conversions, même si le
   journal change d'ordre ou ne contient plus qu'une partie des sources. Une ancienne sortie sans correspondance
@@ -193,7 +201,7 @@ Les suites JavaScript couvrent aussi la reprise des conversions vidéo et l'arr�
 | `chrome.mjs`, `csv.mjs` | Code commun aux deux scripts |
 | `connexion-google-photos.mjs` | Connexion à Google pour l'export « Google Photos » (lancé par le module au besoin) |
 | `rafales-a-blanc.mjs`, `rafales-regles.mjs` | Rapport HTML des rafales d'un dossier et ses règles, sans rien modifier |
-| `albums-google-photos.lrplugin` | Plugin Lightroom Albums Google Photos : recréation des albums (`RecreerAlbums.lua`, `Correspondance.lua`, `Epoques.lua`, `Noms.lua`) et export (`ServiceGooglePhotos.lua`, `GooglePhotos.lua`, `Videos.lua`, `Json.lua`, `presets\`) |
+| `albums-google-photos.lrplugin` | Plugin Lightroom Albums Google Photos : recréation des albums (`RecreerAlbums.lua`, `Correspondance.lua`, `Epoques.lua` pour les sessions, `Noms.lua`), export (`ServiceGooglePhotos.lua`, `GooglePhotos.lua`, `Videos.lua`, `Json.lua`, `presets\`), langue (`Langue.lua`, `Reglages.lua`, `TranslatedStrings_en.txt`) |
 | Dépôt voisin [`lightroom-deduplicate`](https://github.com/mtthth/lightroom-deduplicate) | Plugin autonome de fusion des doublons et de réduction des rafales |
 | `tests\` | Tests autonomes de Google Photos, hors de Lightroom (`node tests/lancer.mjs`) |
 | `albums-tous.csv`, `photos-albums-tous.csv` | Export des albums (inutile d'y toucher) |

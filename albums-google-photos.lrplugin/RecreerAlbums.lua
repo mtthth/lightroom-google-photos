@@ -5,10 +5,13 @@
 --
 -- Deux ensembles de collections sont créés :
 --   « Google Photos - albums » : une collection par album Google Photos ;
---   « Google Photos - époques » : pour chaque album, une collection avec les photos de l'album
+--   « Google Photos - sessions » : pour chaque album, une collection avec les photos de l'album
 --     et toutes les photos du catalogue prises entre sa première et sa dernière photo, plus une
 --     collection « intercalaire » dans chaque trou entre deux périodes couvertes par des albums
---     (voir Epoques.lua).
+--     (voir Epoques.lua, qui garde son ancien nom). L'ensemble s'appelait « Google Photos - époques »
+--     jusqu'à la version 1.0.1 : il est renommé au premier passage.
+-- Les textes affichés suivent la langue choisie dans les réglages du module (voir Langue.lua) ;
+-- les noms des collections, eux, ne dépendent pas de la langue.
 -- Relancer le module ne crée pas de doublons : il complète les collections existantes.
 -- Les photos introuvables sont listées dans un fichier « …-non-trouvees.csv » à côté du CSV.
 
@@ -26,7 +29,9 @@ local GoogleCollections = require 'GoogleCollections'
 local Empreintes = require 'Empreintes'
 local Epoques = require 'Epoques'
 local Historique = require 'Historique'
+local Langue = require 'Langue'
 local Noms = require 'Noms'
+local T = Langue.t
 
 -- Collections de mise à l'écart gérées par le plugin Deduplicate.
 local COLLECTION_DOUBLONS = 'Doublons à retirer'
@@ -34,10 +39,10 @@ local COLLECTION_RAFALES = 'Rafales à retirer'
 
 local TAILLE_LOT = 1000
 local ENSEMBLE_ALBUMS = Noms.ENSEMBLE_ALBUMS
-local ENSEMBLE_EPOQUES = Noms.ENSEMBLE_EPOQUES
--- Un album plus long que cela n'est pas une époque (album annuel, album de plusieurs années…) :
--- il reste une collection d'album mais ne définit ni époque ni période intercalaire.
--- nil : aucune limite, tous les albums définissent une époque.
+local ENSEMBLE_SESSIONS = Noms.ENSEMBLE_SESSIONS
+-- Un album plus long que cela n'est pas une session (album annuel, album de plusieurs années…) :
+-- il reste une collection d'album mais ne définit ni session ni période intercalaire.
+-- nil : aucune limite, tous les albums définissent une session.
 local DUREE_MAX_EPOQUE_JOURS = 45
 -- Titre sous lequel export-albums.mjs range les photos qui ne sont dans aucun album.
 local TITRE_HORS_ALBUM = '(hors album)'
@@ -46,7 +51,7 @@ local HISTORIQUE = LrPathUtils.child(LrPathUtils.parent(_PLUGIN.path), 'photos-t
 -- Lit un CSV séparé par « ; », avec guillemets éventuels et BOM UTF-8.
 local function lireCsv(chemin)
   local f = io.open(chemin, 'rb')
-  if not f then error('Impossible de lire ' .. chemin) end
+  if not f then error(T('Impossible de lire ', 'Cannot read ') .. chemin, 0) end
   local texte = f:read('*a'):gsub('^\239\187\191', '')
   f:close()
 
@@ -88,7 +93,7 @@ end
 
 local function ecrireCsv(chemin, lignes)
   local f = io.open(chemin, 'wb')
-  if not f then error('Impossible d’écrire ' .. chemin) end
+  if not f then error(T('Impossible d’écrire ', 'Cannot write ') .. chemin, 0) end
   f:write('\239\187\191')
   for _, ligne in ipairs(lignes) do
     local cellules = {}
@@ -168,6 +173,22 @@ local function photoIdentique(index, chemin)
   return nil
 end
 
+-- Renomme l'ensemble des sessions créé avant la version 1.1 (« Google Photos - époques »), pour que
+-- les collections existantes soient complétées plutôt que recréées. À appeler en écriture.
+local function renommerAncienEnsemble(catalogue)
+  local ancien, nouveau
+  for _, ensemble in ipairs(catalogue:getChildCollectionSets()) do
+    local nom = ensemble:getName()
+    if nom == Noms.ANCIEN_ENSEMBLE_SESSIONS then ancien = ensemble end
+    if nom == ENSEMBLE_SESSIONS then nouveau = ensemble end
+  end
+  if ancien and not nouveau then
+    ancien:setName(ENSEMBLE_SESSIONS)
+    return true
+  end
+  return false
+end
+
 -- Ensemble « AAAA » rangé dans l'ensemble racine (créé une seule fois par année).
 local function ensembleAnnee(catalogue, racine, cache, annee)
   if not cache[annee] then
@@ -204,12 +225,12 @@ local function creerCollection(catalogue, nom, ensemble, problemes, pris)
         nomsPris[candidat:lower()] = true
         return resultat
       end
-      dernier = ok and 'refusé par Lightroom' or tostring(resultat)
+      dernier = ok and T('refusé par Lightroom', 'refused by Lightroom') or tostring(resultat)
     end
   end
   problemes.nb = problemes.nb + 1
   if #problemes.exemples < 5 then
-    table.insert(problemes.exemples, 'collection « ' .. nom .. ' » : ' .. dernier)
+    table.insert(problemes.exemples, T('collection « ', 'collection “') .. nom .. T(' » : ', '”: ') .. dernier)
   end
   return nil
 end
@@ -238,7 +259,7 @@ end
 -- Identifiants des photos des collections « Doublons à retirer » (copies en trop trouvées par
 -- « Fusionner les doublons ») et « Rafales à retirer » (cadres en trop de « Réduire les rafales »),
 -- pas encore retirées du catalogue, et leur nombre. Elles sont ignorées : sinon elles reviendraient
--- dans les albums et les époques, à la place de la copie ou du cadre gardé.
+-- dans les albums et les sessions, à la place de la copie ou du cadre gardé.
 local function copiesEnTrop(catalogue)
   return GoogleCollections.photosDesCollections(catalogue, { COLLECTION_DOUBLONS, COLLECTION_RAFALES })
 end
@@ -246,7 +267,7 @@ end
 -- Indexe les photos du catalogue par lots, en affichant l'avancement.
 -- Renvoie nil si l'utilisateur annule.
 local function indexerCatalogue(catalogue, progression, problemes)
-  progression:setCaption('Lecture du catalogue : liste des photos…')
+  progression:setCaption(T('Lecture du catalogue : liste des photos…', 'Reading the catalog: list of photos…'))
   local photos = catalogue:getAllPhotos()
   local ignorees, nbIgnorees = copiesEnTrop(catalogue)
   -- Deduplicate est le seul à créer ce fichier et à le synchroniser avec l'annulation Lightroom.
@@ -255,7 +276,8 @@ local function indexerCatalogue(catalogue, progression, problemes)
   if LrFileUtils.exists(HISTORIQUE) then
     local contenu = LrFileUtils.readFile(HISTORIQUE)
     assert(contenu and contenu:find('# historique-commun-deduplicate-google-v1', 1, true),
-      'Historique partagé non initialisé : recharge le module Deduplicate avant de recréer les albums.')
+      T('Historique partagé non initialisé : recharge le module Deduplicate avant de recréer les albums.',
+        'Shared history not initialised: reload the Deduplicate plug-in before recreating the albums.'))
   end
   local historique = Historique.lire(HISTORIQUE)
   local index = Correspondance.nouvelIndex()
@@ -268,7 +290,7 @@ local function indexerCatalogue(catalogue, progression, problemes)
   end
   index.nbIgnorees = nbIgnorees
   index.temps = {}    -- photo → date de prise de vue (secondes Lightroom)
-  index.datees = {}   -- { t = secondes Lightroom, photo }, pour les époques
+  index.datees = {}   -- { t = secondes Lightroom, photo }, pour les sessions
   index.parTemps = {} -- seconde Lightroom → photos prises à cet instant
   index.noms = {}     -- photo → nom de fichier en minuscules
   -- Pour reconnaître un fichier déjà importé : taille, ou nom en minuscules → { { photo, chemin } }.
@@ -277,7 +299,7 @@ local function indexerCatalogue(catalogue, progression, problemes)
   for debut = 1, #photos, TAILLE_LOT do
     if progression:isCanceled() then return nil end
     local fin = math.min(debut + TAILLE_LOT - 1, #photos)
-    progression:setCaption(string.format('Lecture du catalogue : %d / %d photos', fin, #photos))
+    progression:setCaption(string.format(T('Lecture du catalogue : %d / %d photos', 'Reading the catalog: %d / %d photos'), fin, #photos))
 
     local lot = {}
     for i = debut, fin do lot[#lot + 1] = photos[i] end
@@ -319,7 +341,7 @@ local function indexerCatalogue(catalogue, progression, problemes)
       if not ok then
         problemes.nb = problemes.nb + 1
         if #problemes.exemples < 5 then
-          table.insert(problemes.exemples, 'catalogue : ' .. tostring(erreur))
+          table.insert(problemes.exemples, T('catalogue : ', 'catalog: ') .. tostring(erreur))
         end
       end
     end
@@ -332,11 +354,11 @@ LrTasks.startAsyncTask(function()
   LrFunctionContext.callWithContext('recreerAlbums', function(contexte)
     -- Les erreurs internes de Lightroom n'indiquent pas d'où elles viennent :
     -- on retient l'étape en cours pour l'afficher.
-    local etape = 'choix du fichier'
+    local etape = T('choix du fichier', 'choosing the file')
     local ok, erreur = LrTasks.pcall(function()
 
     local choix = LrDialogs.runOpenPanel {
-      title = 'Choisir le fichier photos-albums-<année>.csv',
+      title = T('Choisir le fichier photos-albums-<année>.csv', 'Choose the photos-albums-<year>.csv file'),
       canChooseFiles = true,
       canChooseDirectories = false,
       allowsMultipleSelection = false,
@@ -345,11 +367,13 @@ LrTasks.startAsyncTask(function()
     if not choix then return end
     local cheminCsv = choix[1]
 
-    etape = 'lecture du CSV'
+    etape = T('lecture du CSV', 'reading the CSV')
     local lignes = lireCsv(cheminCsv)
     local entete = lignes[1] or {}
     if entete[1] ~= 'album' or entete[2] ~= 'fichier' then
-      LrDialogs.message('Fichier inattendu', 'Choisis le fichier photos-albums-<année>.csv produit par export-albums.mjs.', 'critical')
+      LrDialogs.message(T('Fichier inattendu', 'Unexpected file'),
+        T('Choisis le fichier photos-albums-<année>.csv produit par export-albums.mjs.',
+          'Choose the photos-albums-<year>.csv file produced by export-albums.mjs.'), 'critical')
       return
     end
 
@@ -363,17 +387,18 @@ LrTasks.startAsyncTask(function()
       end
     end
 
-    etape = 'barre de progression'
-    local progression = LrProgressScope { title = 'Recréation des albums Google Photos', functionContext = contexte }
-    etape = 'lecture du catalogue'
+    etape = T('barre de progression', 'progress bar')
+    local progression = LrProgressScope { title = T('Recréation des albums Google Photos', 'Recreating Google Photos albums'),
+      functionContext = contexte }
+    etape = T('lecture du catalogue', 'reading the catalog')
     local catalogue = LrApplication.activeCatalog()
     local problemes = { nb = 0, exemples = {} }
     local index, nbCatalogue = indexerCatalogue(catalogue, progression, problemes)
     if not index then return end
 
     -- Regroupe les photos retrouvées par album, dans l'ordre du fichier.
-    etape = 'recherche des photos des albums'
-    progression:setCaption('Recherche des photos des albums…')
+    etape = T('recherche des photos des albums', 'finding the album photos')
+    progression:setCaption(T('Recherche des photos des albums…', 'Finding the album photos…'))
     local albums, ordre = {}, {}
     local nonTrouvees = { { 'album', 'fichier', 'date_prise_de_vue' } }
     local manquantes = {}
@@ -437,7 +462,7 @@ LrTasks.startAsyncTask(function()
 
     -- Décalage horaire Lightroom / Google, déduit des photos reconnues par leur nom, puis
     -- seconde chance par l'heure de prise de vue pour celles dont le nom a changé.
-    etape = 'recherche par l’heure de prise de vue'
+    etape = T('recherche par l’heure de prise de vue', 'matching by capture time')
     local decalage = Epoques.decalage(paires)
     local nbParHeure = 0
     local encore = {}
@@ -459,7 +484,7 @@ LrTasks.startAsyncTask(function()
 
     -- Fichiers téléchargés correspondant aux photos manquantes (une même photo peut servir
     -- à plusieurs albums : on ne l'importe qu'une fois).
-    etape = 'recherche des fichiers téléchargés'
+    etape = T('recherche des fichiers téléchargés', 'finding the downloaded files')
     local fichiersParLigne, aImporter, dejaPrevus = {}, {}, {}
     for i, m in ipairs(manquantes) do
       local entree = manifeste[cleManifeste(m.titreCsv, m.fichier, m.date)]
@@ -475,13 +500,13 @@ LrTasks.startAsyncTask(function()
     end
 
     -- Un accès en écriture par photo : la barre de progression avance et on voit où ça en est.
-    etape = 'import des photos téléchargées'
+    etape = T('import des photos téléchargées', 'importing the downloaded photos')
     local importees = {}
     local nbImportees, nbDejaPresentes = 0, 0
     local debutImport = LrDate.currentTime()
     for i, chemin in ipairs(aImporter) do
       if progression:isCanceled() then break end
-      progression:setCaption(string.format('Import des photos téléchargées : %d / %d', i, #aImporter))
+      progression:setCaption(string.format(T('Import des photos téléchargées : %d / %d', 'Importing downloaded photos: %d / %d'), i, #aImporter))
       progression:setPortionComplete(i - 1, #aImporter)
       local ok, resultat = LrTasks.pcall(function()
         local photo = catalogue:findPhotoByPath(chemin)
@@ -490,7 +515,7 @@ LrTasks.startAsyncTask(function()
           if photo then nbDejaPresentes = nbDejaPresentes + 1 end
         end
         if not photo then
-          catalogue:withWriteAccessDo('Importer une photo Google Photos', function()
+          catalogue:withWriteAccessDo(T('Importer une photo Google Photos', 'Import a Google Photos photo'), function()
             photo = catalogue:addPhoto(chemin)
           end, { timeout = 60 })
         end
@@ -502,7 +527,7 @@ LrTasks.startAsyncTask(function()
       else
         problemes.nb = problemes.nb + 1
         if #problemes.exemples < 5 then
-          table.insert(problemes.exemples, 'import de ' .. chemin .. ' : ' .. tostring(resultat))
+          table.insert(problemes.exemples, T('import de ', 'import of ') .. chemin .. T(' : ', ': ') .. tostring(resultat))
         end
       end
     end
@@ -522,8 +547,8 @@ LrTasks.startAsyncTask(function()
       end
     end
 
-    etape = 'création des collections'
-    progression:setCaption('Création des collections…')
+    etape = T('création des collections', 'creating the collections')
+    progression:setCaption(T('Création des collections…', 'Creating the collections…'))
     -- Un ordre indépendant du CSV attache les suffixes des homonymes au même identifiant.
     table.sort(ordre, function(a, b)
       if albums[a].titre ~= albums[b].titre then return albums[a].titre < albums[b].titre end
@@ -540,7 +565,7 @@ LrTasks.startAsyncTask(function()
         album.nom, album.annee = nom.nom, nom.annee
       end
     end
-    catalogue:withWriteAccessDo('Recréer les albums Google Photos', function()
+    catalogue:withWriteAccessDo(T('Recréer les albums Google Photos', 'Recreate Google Photos albums'), function()
       local racine = catalogue:createCollectionSet(ENSEMBLE_ALBUMS, nil, true)
       local ensembles, nomsPris = {}, {}
       for _, cleAlbum in ipairs(ordre) do
@@ -554,10 +579,10 @@ LrTasks.startAsyncTask(function()
       end
     end, { timeout = 30 })
 
-    -- Époques : décalage entre les heures de Lightroom et celles de Google Photos (fuseau),
+    -- Sessions : décalage entre les heures de Lightroom et celles de Google Photos (fuseau),
     -- déduit des photos reconnues, puis calcul des périodes.
-    etape = 'calcul des époques'
-    progression:setCaption('Calcul des époques…')
+    etape = T('calcul des sessions', 'computing the sessions')
+    progression:setCaption(T('Calcul des sessions…', 'Computing the sessions…'))
     local datees = {}
     for _, d in ipairs(index.datees) do
       table.insert(datees, { t = Epoques.depuisLightroom(d.t, decalage), photo = d.photo })
@@ -572,8 +597,8 @@ LrTasks.startAsyncTask(function()
         if t then table.insert(datees, { t = Epoques.depuisLightroom(t, decalage), photo = photo }) end
       end
     end
-    -- Les photos hors album ne définissent pas d'époque : elles tombent dans celle qui couvre leur
-    -- date (toutes les photos du catalogue prises pendant une époque en font partie).
+    -- Les photos hors album ne définissent pas de session : elles tombent dans celle qui couvre leur
+    -- date (toutes les photos du catalogue prises pendant une session en font partie).
     local listeAlbums = {}
     for _, cleAlbum in ipairs(ordre) do
       if not albums[cleAlbum].horsAlbum then table.insert(listeAlbums, albums[cleAlbum]) end
@@ -581,10 +606,12 @@ LrTasks.startAsyncTask(function()
     local dureeMax = DUREE_MAX_EPOQUE_JOURS and DUREE_MAX_EPOQUE_JOURS * 24 * 3600 or nil
     local epoques = Epoques.calculer(listeAlbums, datees, dureeMax)
 
-    etape = 'création des collections d’époques'
-    progression:setCaption('Création des collections d’époques…')
-    catalogue:withWriteAccessDo('Créer les époques Google Photos', function()
-      local racine = catalogue:createCollectionSet(ENSEMBLE_EPOQUES, nil, true)
+    etape = T('création des collections de sessions', 'creating the session collections')
+    progression:setCaption(T('Création des collections de sessions…', 'Creating the session collections…'))
+    local ensembleRenomme = false
+    catalogue:withWriteAccessDo(T('Créer les sessions Google Photos', 'Create Google Photos sessions'), function()
+      ensembleRenomme = renommerAncienEnsemble(catalogue)
+      local racine = catalogue:createCollectionSet(ENSEMBLE_SESSIONS, nil, true)
       local ensembles, nomsPris = {}, {}
       for i, epoque in ipairs(epoques) do
         progression:setPortionComplete(i, #epoques)
@@ -595,61 +622,75 @@ LrTasks.startAsyncTask(function()
     end, { timeout = 30 })
     progression:done()
 
-    etape = 'écriture du rapport'
+    etape = T('écriture du rapport', 'writing the report')
     local nbNonTrouvees = #nonTrouvees - 1
     local message = string.format(
-      '%d collections créées ou complétées dans « %s ».\n%d photos retrouvées sur %d (catalogue : %d photos).',
+      T('%d collections créées ou complétées dans « %s ».\n%d photos retrouvées sur %d (catalogue : %d photos).',
+        '%d collections created or completed in “%s”.\n%d photos found out of %d (catalog: %d photos).'),
       #ordre, ENSEMBLE_ALBUMS, nbTrouvees, nbTrouvees + nbNonTrouvees + nbHistorique, nbCatalogue)
     if nbHistorique > 0 then
-      message = message .. string.format('\n%d lignes ignorées selon l’historique des traitements.', nbHistorique)
+      message = message .. string.format(T('\n%d lignes ignorées selon l’historique des traitements.',
+        '\n%d lines skipped according to the processing history.'), nbHistorique)
     end
     local nbHorsAlbum = 0
     for _, cleAlbum in ipairs(ordre) do
       if albums[cleAlbum].horsAlbum then nbHorsAlbum = nbHorsAlbum + #albums[cleAlbum].photos end
     end
     if nbHorsAlbum > 0 then
-      message = message .. string.format('\n%d photos hors album rangées dans les collections « (hors album) » de chaque année.', nbHorsAlbum)
+      message = message .. string.format(T('\n%d photos hors album rangées dans les collections « (hors album) » de chaque année.',
+        '\n%d photos outside any album placed in the “(hors album)” collection of each year.'), nbHorsAlbum)
     end
     local nbIntercalaires = 0
     for _, epoque in ipairs(epoques) do
       if epoque.intercalaire then nbIntercalaires = nbIntercalaires + 1 end
     end
-    message = message .. string.format('\n%d époques (dont %d intercalaires) dans « %s » ; décalage horaire détecté : %+.2f h.',
-      #epoques, nbIntercalaires, ENSEMBLE_EPOQUES, decalage / 3600)
+    message = message .. string.format(T('\n%d sessions (dont %d intercalaires) dans « %s » ; décalage horaire détecté : %+.2f h.',
+      '\n%d sessions (including %d fillers) in “%s”; time offset detected: %+.2f h.'),
+      #epoques, nbIntercalaires, ENSEMBLE_SESSIONS, decalage / 3600)
+    if ensembleRenomme then
+      message = message .. string.format(T('\nL’ensemble « %s » a été renommé « %s ».', '\nThe “%s” set was renamed “%s”.'),
+        Noms.ANCIEN_ENSEMBLE_SESSIONS, ENSEMBLE_SESSIONS)
+    end
     if nbParHeure > 0 then
-      message = message .. string.format('\n%d photos reconnues par l’heure de prise de vue (nom de fichier différent).', nbParHeure)
+      message = message .. string.format(T('\n%d photos reconnues par l’heure de prise de vue (nom de fichier différent).',
+        '\n%d photos matched by capture time (different file name).'), nbParHeure)
     end
     if nbImportees > nbDejaPresentes then
-      message = message .. string.format('\n%d photos importées depuis le dossier des photos téléchargées (%d s).',
+      message = message .. string.format(T('\n%d photos importées depuis le dossier des photos téléchargées (%d s).',
+        '\n%d photos imported from the downloaded photos folder (%d s).'),
         nbImportees - nbDejaPresentes, math.floor(dureeImport + 0.5))
     end
     if nbDejaPresentes > 0 then
-      message = message .. string.format('\n%d photos téléchargées étaient déjà au catalogue sous un autre chemin (même fichier) : '
-        .. 'pas de nouvel import.', nbDejaPresentes)
+      message = message .. string.format(T('\n%d photos téléchargées étaient déjà au catalogue sous un autre chemin (même fichier) : '
+        .. 'pas de nouvel import.', '\n%d downloaded photos were already in the catalog under another path (same file): '
+        .. 'not imported again.'), nbDejaPresentes)
     end
     if (index.nbIgnorees or 0) > 0 then
-      message = message .. string.format('\n%d photos en trop des collections « %s » et « %s » ignorées (à retirer du catalogue).',
+      message = message .. string.format(T('\n%d photos en trop des collections « %s » et « %s » ignorées (à retirer du catalogue).',
+        '\n%d extra photos from the “%s” and “%s” collections skipped (to be removed from the catalog).'),
         index.nbIgnorees, COLLECTION_DOUBLONS, COLLECTION_RAFALES)
     end
     if (index.nbHistoriqueIgnorees or 0) > 0 then
-      message = message .. string.format('\n%d photos ignorées d’après l’historique persistant.', index.nbHistoriqueIgnorees)
+      message = message .. string.format(T('\n%d photos ignorées d’après l’historique persistant.',
+        '\n%d photos skipped according to the persistent history.'), index.nbHistoriqueIgnorees)
     end
     local cheminRapport = LrPathUtils.removeExtension(cheminCsv) .. '-non-trouvees.csv'
     if nbNonTrouvees > 0 then
       ecrireCsv(cheminRapport, nonTrouvees)
-      message = message .. string.format('\n\n%d photos introuvables, listées dans :\n%s', nbNonTrouvees, cheminRapport)
+      message = message .. string.format(T('\n\n%d photos introuvables, listées dans :\n%s',
+        '\n\n%d photos not found, listed in:\n%s'), nbNonTrouvees, cheminRapport)
     elseif LrFileUtils.exists(cheminRapport) then
       LrFileUtils.delete(cheminRapport)
     end
     if problemes.nb > 0 then
-      message = message .. string.format('\n\n%d erreurs internes, par exemple :\n%s',
+      message = message .. string.format(T('\n\n%d erreurs internes, par exemple :\n%s', '\n\n%d internal errors, for example:\n%s'),
         problemes.nb, table.concat(problemes.exemples, '\n'))
     end
     LrDialogs.message('Albums Google Photos', message, 'info')
     end)
     if not ok then
-      LrDialogs.message('Erreur du module Albums Google Photos',
-        string.format('Étape : %s\n%s', etape, tostring(erreur)), 'critical')
+      LrDialogs.message(T('Erreur du module Albums Google Photos', 'Google Photos Albums plug-in error'),
+        string.format(T('Étape : %s\n%s', 'Step: %s\n%s'), etape, tostring(erreur)), 'critical')
     end
   end)
 end)

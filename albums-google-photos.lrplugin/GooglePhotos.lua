@@ -15,6 +15,8 @@ local LrPathUtils = import 'LrPathUtils'
 local LrTasks = import 'LrTasks'
 
 local Json = require 'Json'
+local Langue = require 'Langue'
+local T = Langue.t
 
 local M = {}
 
@@ -56,7 +58,8 @@ local function requete(methode, adresse, corps, entetes, delai)
     if essai == 3 or not (panne or statut == 429 or (statut and statut >= 500)) then
       if panne then
         local detail = infos and infos.error and (infos.error.name or infos.error.errorCode)
-        error('Google Photos ne répond pas (' .. tostring(detail or 'erreur réseau') .. ').', 0)
+        error(T('Google Photos ne répond pas (', 'Google Photos is not responding (')
+          .. tostring(detail or T('erreur réseau', 'network error')) .. ').', 0)
       end
       return reponse, statut
     end
@@ -73,7 +76,8 @@ local function messageErreur(reponse, statut)
   elseif type(reponse) == 'string' and reponse ~= '' then
     detail = reponse:sub(1, 300)
   end
-  return string.format('erreur %s de Google Photos%s', tostring(statut), detail and (' : ' .. tostring(detail)) or '')
+  return string.format(T('erreur %s de Google Photos%s', 'Google Photos error %s%s'), tostring(statut),
+    detail and (T(' : ', ': ') .. tostring(detail)) or '')
 end
 
 -- Connexion -----------------------------------------------------------------------------
@@ -86,14 +90,16 @@ end
 -- qu'il ait fini (10 minutes au plus). Lève une erreur avec ce qu'a écrit le script s'il échoue.
 function M.lancerConnexion()
   if not LrFileUtils.exists(SCRIPT_CONNEXION) then
-    error('script de connexion introuvable : ' .. SCRIPT_CONNEXION, 0)
+    error(T('script de connexion introuvable : ', 'connection script not found: ') .. SCRIPT_CONNEXION, 0)
   end
   LrFileUtils.createAllDirectories(DOSSIER_CONNEXION)
   local journal = LrPathUtils.child(DOSSIER_CONNEXION, 'connexion.log')
   -- Guillemets autour de toute la commande : cmd.exe retire la première et la dernière.
-  local commande = string.format('"node "%s" > "%s" 2>&1"', SCRIPT_CONNEXION, journal)
+  -- --en : le script affiche ses messages et sa page de fin en anglais.
+  local commande = string.format('"node "%s"%s > "%s" 2>&1"', SCRIPT_CONNEXION, Langue.anglais() and ' --en' or '', journal)
   if LrTasks.execute(commande) ~= 0 then
-    error('la connexion à Google Photos a échoué.\n\n' .. (lireFichier(journal) or ''), 0)
+    error(T('la connexion à Google Photos a échoué.\n\n', 'the connection to Google Photos failed.\n\n')
+      .. (lireFichier(journal) or ''), 0)
   end
 end
 
@@ -125,7 +131,7 @@ end
 function Client:jeton()
   -- Un envoi peut durer plus d'une heure.
   if LrDate.currentTime() > self.expiration - 300 and not self:renouveler() then
-    error('Google a coupé la connexion pendant l’envoi.', 0)
+    error(T('Google a coupé la connexion pendant l’envoi.', 'Google dropped the connection during the upload.'), 0)
   end
   return self.jetonAcces
 end
@@ -189,7 +195,7 @@ end
 -- Envoie un fichier (photo JPEG ou vidéo). Renvoie le jeton d'envoi à passer ensuite à ajouterAAlbum.
 function Client:envoyer(chemin)
   local octets = lireFichier(chemin)
-  if not octets then error('fichier illisible : ' .. chemin, 0) end
+  if not octets then error(T('fichier illisible : ', 'unreadable file: ') .. chemin, 0) end
   local entetes = {
     { field = 'Authorization', value = 'Bearer ' .. self:jeton() },
     { field = 'Content-Type', value = 'application/octet-stream' },
@@ -222,9 +228,10 @@ function Client:ajouterAAlbum(idAlbum, elements)
   for i, e in ipairs(elements) do
     local r = parJeton[e.jeton]
     if not r then
-      erreurs[i] = 'absente de la réponse de Google Photos'
+      erreurs[i] = T('absente de la réponse de Google Photos', 'missing from the Google Photos response')
     elseif not r.mediaItem then
-      erreurs[i] = 'refusée par Google Photos' .. (r.status and r.status.message and (' : ' .. r.status.message) or '')
+      erreurs[i] = T('refusée par Google Photos', 'refused by Google Photos')
+        .. (r.status and r.status.message and (T(' : ', ': ') .. r.status.message) or '')
     end
   end
   return erreurs

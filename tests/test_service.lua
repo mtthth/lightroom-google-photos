@@ -468,5 +468,30 @@ verifier('N observateur taille', p.LR_size_maxWidth, 1600)
 p.videos = 'convertir'; observateurs.videos(p, 'videos', 'convertir')
 verifier('N observateur vidéos', p.LR_export_videoFormat, 'original')
 
+-- O. Le nom de l'album est prérempli avec la collection affichée, et reste modifiable.
+sources = { { getName = function() return ' Week-end à Lyon ' end } }
+p = { album = 'Ancien album', addObserver = function() end }
+Service.startDialog(p)
+verifier('O prérempli avec la collection', p.album, 'Week-end à Lyon')
+sources = { { getName = function() return 'A' end }, { getName = function() return 'B' end } }
+p = { album = 'Ancien album', addObserver = function() end }
+Service.startDialog(p)
+verifier('O plusieurs sources : champ inchangé', p.album, 'Ancien album')
+sources = { { getName = function() error('source spéciale') end } }
+p = { album = '', addObserver = function() end }
+Service.startDialog(p)
+verifier('O source sans nom : champ inchangé', p.album, '')
+
+-- P. Interface en anglais.
+local Langue = require 'Langue'
+Langue.forcer('en')
+sources = { { getName = function() return 'English trip' end } }
+reponses = { 'cancel' }
+exporter(noms(3, {}))
+verifier('P message en anglais', confirmations[#confirmations] and confirmations[#confirmations].texte,
+  '3 photos uploaded to the album “English trip”.')
+verifier('P bouton en anglais', confirmations[#confirmations] and confirmations[#confirmations].oui, 'Open the album')
+Langue.forcer(nil)
+
 print(string.format('%d vérifications, %d échecs', nb, echecs))
 os.exit(echecs == 0 and 0 or 1)

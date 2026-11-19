@@ -8,11 +8,12 @@ catalogue et Google Photos, sans passer par Takeout :
 - **Recrée vos albums Google Photos en collections Lightroom**, rangées par année
   (`Google Photos - albums / 2025 / 2025-07-24 – Week-end à Lyon`), et retrouve dans le catalogue les originaux
   des photos que Google ne garde qu'en version réduite.
-- **Range les photos par époque** : pour chaque album, toutes les photos du catalogue prises pendant la même période,
-  plus des collections intercalaires entre deux périodes.
+- **Range les photos par session** (`Google Photos - sessions`) : pour chaque album, toutes les photos du catalogue
+  prises pendant la même période, plus des collections intercalaires entre deux périodes.
 - **Récupère les photos manquantes** : celles des albums partagés ou jamais synchronisées avec Lightroom sont
   téléchargées en qualité originale, prêtes à importer.
-- **Exporte une collection vers un album Google Photos** depuis la boîte d'export de Lightroom, par l'API officielle,
+- **Exporte une collection vers un album Google Photos** depuis la boîte d'export de Lightroom (nom de l'album
+  prérempli avec celui de la collection), par l'API officielle,
   avec redimensionnement des photos et conversion des vidéos en 1080p.
 
 Les mises à jour sont incrémentales : seuls les albums nouveaux ou modifiés sont relus, et les collections existantes
@@ -32,6 +33,8 @@ sont complétées, jamais dupliquées.
    vous avez le droit d'écrire : le module utilise les scripts et les fichiers posés à côté de son dossier.
 2. Dans Lightroom Classic : **Fichier → Gestionnaire de modules externes → Ajouter**, puis choisissez le dossier
    `albums-google-photos.lrplugin`.
+3. La langue de l'interface (français par défaut, ou anglais) se choisit dans le même gestionnaire, dans la section
+   du module.
 
 ## Premiers pas
 
@@ -54,7 +57,8 @@ les photos réduites, les cas particuliers et les fichiers produits.
 ## Limites et précautions
 
 - **Windows uniquement** : Chrome, Lightroom et les dossiers de travail sont cherchés à leurs emplacements Windows.
-- **Interface et documentation en français.**
+- **Interface en français ou en anglais** (réglage du module) ; le mode d'emploi détaillé et les scripts Node sont
+  en français.
 - **Lecture des albums par une interface non documentée.** L'API officielle de Google Photos ne donne plus accès aux
   albums de l'utilisateur depuis mars 2025 : `export-albums.mjs` et `telecharger-manquantes.mjs` lisent donc le site
   Google Photos à travers votre session Chrome. Ils peuvent cesser de fonctionner si Google modifie son site, et cet
@@ -74,7 +78,7 @@ projet et dans `%LOCALAPPDATA%\lightroom-google-photos` ; ils sont exclus du sui
 [Deduplicate](https://github.com/mtthth/lightroom-deduplicate) fusionne les doublons et réduit les rafales. Installés
 dans deux dossiers voisins, `lightroom-google-photos` (nom à conserver) et `lightroom-deduplicate`, les deux modules
 partagent l'historique des photos écartées : celles que Deduplicate a retirées ne réapparaissent ni dans les albums,
-ni dans les époques, ni dans les téléchargements. Ce module fonctionne aussi seul ; si vous ajoutez Deduplicate
+ni dans les sessions, ni dans les téléchargements. Ce module fonctionne aussi seul ; si vous ajoutez Deduplicate
 après coup, lancez-le une fois avant de recréer les albums.
 
 ## Tests
@@ -82,7 +86,7 @@ après coup, lancez-le une fois avant de recréer les albums.
 ```powershell
 node tests/lancer.mjs             # suites Lua et JavaScript (Node 22+, texlua de MiKTeX)
 node tests/lancer.mjs --js        # JavaScript seul, sans MiKTeX
-node tests/lancer.mjs --mutants   # tests, puis cinq régressions contrôlées
+node tests/lancer.mjs --mutants   # tests, puis six régressions contrôlées
 ```
 
 Les tests tournent hors de Lightroom avec un faux Lightroom et des données synthétiques : ils n'ouvrent pas Chrome,

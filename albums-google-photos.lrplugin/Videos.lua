@@ -10,6 +10,8 @@ local LrFileUtils = import 'LrFileUtils'
 local LrPathUtils = import 'LrPathUtils'
 local LrTasks = import 'LrTasks'
 
+local T = require('Langue').t
+
 local M = {}
 
 M.COTE_MAX = 1080
@@ -98,7 +100,8 @@ function M.convertir(ffmpeg, entree, sortie)
   for ligne in message:gmatch('[^\r\n]+') do
     if ligne:find('%S') then derniere = ligne end
   end
-  return false, 'conversion de la vidéo impossible (ffmpeg' .. (derniere and (' : ' .. derniere) or '') .. ').'
+  return false, T('conversion de la vidéo impossible (ffmpeg', 'video conversion failed (ffmpeg')
+    .. (derniere and (T(' : ', ': ') .. derniere) or '') .. ').'
 end
 
 return M

@@ -1,7 +1,8 @@
 // Connexion à Google Photos pour le service d'export « Google Photos » du module Lightroom
 // (albums-google-photos.lrplugin), qui passe par l'API officielle de Google Photos.
 //
-// Usage : node connexion-google-photos.mjs [fichier client_secret….json]      (Node 22 ou plus)
+// Usage : node connexion-google-photos.mjs [fichier client_secret….json] [--en]      (Node 22 ou plus)
+//   --en : messages et page de fin en anglais (le module le passe quand son interface est en anglais).
 //
 // Le module Lightroom lance ce script tout seul quand il n'est pas encore connecté, ou quand
 // Google a coupé la connexion : il n'y a normalement pas besoin de le lancer à la main.
@@ -39,11 +40,14 @@ const AUTORISATIONS = [
   'https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata',
 ];
 const DELAI_CONNEXION_MS = 10 * 60 * 1000;
+const ANGLAIS = process.argv.includes('--en');
+const ARGUMENTS = process.argv.slice(2).filter((a) => a !== '--en');
+const t = (fr, en) => (ANGLAIS ? en : fr);
 
 // Identifiants du client OAuth : fichier donné en argument, sinon client_secret….json dans le
 // dossier du script, sinon ceux de la connexion précédente.
 function lireClient() {
-  let chemin = process.argv[2];
+  let chemin = ARGUMENTS[0];
   if (!chemin) {
     const trouve = readdirSync(DOSSIER_SCRIPT).find((f) => /^client_secret.*\.json$/i.test(f));
     if (trouve) chemin = path.join(DOSSIER_SCRIPT, trouve);
@@ -51,18 +55,22 @@ function lireClient() {
   if (chemin) {
     const json = JSON.parse(readFileSync(chemin, 'utf8'));
     if (json.web) {
-      throw new Error(`${chemin} est un client « Application Web » : crée plutôt un client « Application de bureau ».`);
+      throw new Error(t(`${chemin} est un client « Application Web » : crée plutôt un client « Application de bureau ».`,
+        `${chemin} is a "Web application" client: create a "Desktop app" client instead.`));
     }
     const { client_id, client_secret } = json.installed ?? {};
-    if (!client_id || !client_secret) throw new Error(`${chemin} ne contient pas d'identifiants de client OAuth.`);
+    if (!client_id || !client_secret) {
+      throw new Error(t(`${chemin} ne contient pas d'identifiants de client OAuth.`, `${chemin} contains no OAuth client credentials.`));
+    }
     return { client_id, client_secret };
   }
   if (existsSync(FICHIER_CONNEXION)) {
     const { client_id, client_secret } = JSON.parse(readFileSync(FICHIER_CONNEXION, 'utf8'));
     if (client_id && client_secret) return { client_id, client_secret };
   }
-  throw new Error(`Fichier client_secret_….json introuvable dans ${DOSSIER_SCRIPT} : ` +
-    'voir les explications en tête de connexion-google-photos.mjs.');
+  throw new Error(t(`Fichier client_secret_….json introuvable dans ${DOSSIER_SCRIPT} : ` +
+    'voir les explications en tête de connexion-google-photos.mjs.',
+    `No client_secret_….json file in ${DOSSIER_SCRIPT}: see the steps at the top of connexion-google-photos.mjs.`));
 }
 
 function ouvrirNavigateur(url) {
@@ -92,12 +100,13 @@ async function obtenirCode(client) {
     const ok = code && url.searchParams.get('state') === etat;
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     if (ok) {
-      res.end(page('Connexion à Google Photos réussie. Tu peux fermer cette page et revenir à Lightroom.'));
+      res.end(page(t('Connexion à Google Photos réussie. Tu peux fermer cette page et revenir à Lightroom.',
+        'Connected to Google Photos. You can close this page and go back to Lightroom.')));
       terminer.resolve(code);
     } else {
-      const erreur = url.searchParams.get('error') ?? 'réponse inattendue';
-      res.end(page(`Connexion à Google Photos refusée (${erreur}).`));
-      terminer.reject(new Error(`connexion refusée (${erreur}).`));
+      const erreur = url.searchParams.get('error') ?? t('réponse inattendue', 'unexpected response');
+      res.end(page(t(`Connexion à Google Photos refusée (${erreur}).`, `Connection to Google Photos refused (${erreur}).`)));
+      terminer.reject(new Error(t(`connexion refusée (${erreur}).`, `connection refused (${erreur}).`)));
     }
   });
   await new Promise((resolve) => serveur.listen(0, '127.0.0.1', resolve));
@@ -114,11 +123,13 @@ async function obtenirCode(client) {
     code_challenge_method: 'S256',
     state: etat,
   });
-  console.log("Connecte-toi à Google dans la page qui vient de s'ouvrir (attente : 10 minutes).");
-  console.log(`Si elle ne s'est pas ouverte : ${adresse}`);
+  console.log(t("Connecte-toi à Google dans la page qui vient de s'ouvrir (attente : 10 minutes).",
+    'Sign in to Google in the page that just opened (waiting up to 10 minutes).'));
+  console.log(t(`Si elle ne s'est pas ouverte : ${adresse}`, `If it did not open: ${adresse}`));
   ouvrirNavigateur(adresse);
 
-  const minuteur = setTimeout(() => terminer.reject(new Error('pas de connexion dans le délai imparti.')), DELAI_CONNEXION_MS);
+  const minuteur = setTimeout(() => terminer.reject(new Error(t('pas de connexion dans le délai imparti.',
+    'no connection within the time allowed.'))), DELAI_CONNEXION_MS);
   try {
     return { code: await resultat, verificateur, redirection };
   } finally {
@@ -143,19 +154,22 @@ async function main() {
     }),
   });
   const jetons = await rep.json();
-  if (!rep.ok) throw new Error(`Google a refusé la connexion : ${jetons.error_description ?? jetons.error}`);
-  if (!jetons.refresh_token) throw new Error("Google n'a pas fourni de jeton de renouvellement.");
+  if (!rep.ok) {
+    throw new Error(t('Google a refusé la connexion : ', 'Google refused the connection: ') + (jetons.error_description ?? jetons.error));
+  }
+  if (!jetons.refresh_token) throw new Error(t("Google n'a pas fourni de jeton de renouvellement.", 'Google did not provide a refresh token.'));
   const accordees = (jetons.scope ?? '').split(' ');
   if (AUTORISATIONS.some((a) => !accordees.includes(a))) {
-    throw new Error("toutes les autorisations n'ont pas été accordées : relance la connexion en laissant les cases cochées.");
+    throw new Error(t("toutes les autorisations n'ont pas été accordées : relance la connexion en laissant les cases cochées.",
+      'not all permissions were granted: connect again and leave the boxes ticked.'));
   }
 
   mkdirSync(DOSSIER_CONNEXION, { recursive: true });
   writeFileSync(FICHIER_CONNEXION, JSON.stringify({ ...client, refresh_token: jetons.refresh_token }, null, 2));
-  console.log(`Connexion enregistrée dans ${FICHIER_CONNEXION}`);
+  console.log(t(`Connexion enregistrée dans ${FICHIER_CONNEXION}`, `Connection saved in ${FICHIER_CONNEXION}`));
 }
 
 main().catch((erreur) => {
-  console.error(`Erreur : ${erreur.message}`);
+  console.error(t(`Erreur : ${erreur.message}`, `Error: ${erreur.message}`));
   process.exitCode = 1;
 });

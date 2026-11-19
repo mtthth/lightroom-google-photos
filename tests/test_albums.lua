@@ -214,8 +214,15 @@ local function nouveauCatalogue(photos)
   function catalogue:createCollectionSet(nom, parent)
     for _, e in ipairs(self.ensembles) do if e.nom == nom and e.parent == parent then return e end end
     local e = { nom = nom, parent = parent }
+    function e:getName() return self.nom end
+    function e:setName(n) assert(ecriture, 'setName hors écriture'); self.nom = n end
     self.ensembles[#self.ensembles + 1] = e
     return e
+  end
+  function catalogue:getChildCollectionSets()
+    local r = {}
+    for _, e in ipairs(self.ensembles) do if not e.parent then r[#r + 1] = e end end
+    return r
   end
   function catalogue:getChildCollections()
     local r = {}
@@ -319,7 +326,7 @@ for passage, contenu in ipairs({ ligneB .. lignePartagee .. ligneA, ligneA .. li
   for _, c in ipairs(collections) do
     local racine = c.parent and c.parent.parent and c.parent.parent.nom
     if racine == 'Google Photos - albums' then albumsIds[c.nom] = c end
-    if racine == 'Google Photos - époques' then epoquesIds[c.nom] = c end
+    if racine == 'Google Photos - sessions' then epoquesIds[c.nom] = c end
   end
   local premier, second = albumsIds['2025-01-01 – Vacances'], albumsIds['2025-01-01 – Vacances (2)']
   verifier('homonymes passage ' .. passage .. ' : premier album présent', premier ~= nil, true)
@@ -354,7 +361,7 @@ for passage = 1, 2 do
       nbAlbums = nbAlbums + 1
       verifier('noms nettoyés : nom accepté et unique', not noms[c.nom:lower()] and not c.nom:find('[:/\\]'), true)
       noms[c.nom:lower()] = true
-    elseif racine == 'Google Photos - époques' then nbEpoques = nbEpoques + 1 end
+    elseif racine == 'Google Photos - sessions' then nbEpoques = nbEpoques + 1 end
   end
   verifier('noms nettoyés passage ' .. passage .. ' : cinq albums distincts', nbAlbums, 5)
   verifier('noms nettoyés passage ' .. passage .. ' : cinq époques distinctes', nbEpoques, 5)
@@ -442,6 +449,53 @@ for i = nbDialogues + 1, #dialogues do
 end
 verifier('historique absent : pas de refus', refus, false)
 verifier('historique absent : fichier non créé par Google Photos', mocks.LrFileUtils.exists(HISTORIQUE), false)
+
+-- L'ensemble « Google Photos - époques » des versions 1.0.x est renommé « Google Photos - sessions » :
+-- ses collections sont complétées, pas recréées à côté.
+historique(MARQUEUR)
+ecrire('photos-albums-test.csv', enteteIds .. ligneA)
+nouveauCatalogue({ a, b })
+catalogue.refuserCaracteres = nil
+ecriture = true
+local ancienEnsemble = catalogue:createCollectionSet('Google Photos - époques', nil)
+local ancienneAnnee = catalogue:createCollectionSet('2025', ancienEnsemble)
+local ancienneSession = catalogue:createCollection('2025-01-01 – Vacances', ancienneAnnee)
+ecriture = false
+dofile(PLUGIN .. '/RecreerAlbums.lua')
+local nbAnciens, nbSessions = 0, 0
+for _, e in ipairs(catalogue:getChildCollectionSets()) do
+  if e.nom == 'Google Photos - époques' then nbAnciens = nbAnciens + 1 end
+  if e.nom == 'Google Photos - sessions' then nbSessions = nbSessions + 1 end
+end
+verifier('sessions : ancien ensemble renommé', ancienEnsemble.nom, 'Google Photos - sessions')
+verifier('sessions : plus d’ensemble « époques »', nbAnciens, 0)
+verifier('sessions : un seul ensemble « sessions »', nbSessions, 1)
+verifier('sessions : collection existante complétée', ancienneSession.photos[a], true)
+verifier('sessions : renommage signalé',
+  dialogues[#dialogues].texte:find('« Google Photos - époques » a été renommé', 1, true) ~= nil, true)
+dofile(PLUGIN .. '/RecreerAlbums.lua')
+verifier('sessions : pas de nouveau renommage au relancement',
+  dialogues[#dialogues].texte:find('a été renommé', 1, true), nil)
+
+-- Si les deux ensembles existent, aucun n'est renommé (rien ne doit être fusionné à l'insu de l'utilisateur).
+nouveauCatalogue({ a, b })
+local ancienGarde = catalogue:createCollectionSet('Google Photos - époques', nil)
+catalogue:createCollectionSet('Google Photos - sessions', nil)
+dofile(PLUGIN .. '/RecreerAlbums.lua')
+verifier('sessions : ancien gardé si les deux existent', ancienGarde.nom, 'Google Photos - époques')
+
+-- Interface en anglais : messages traduits, noms des collections inchangés.
+local Langue = require 'Langue'
+Langue.forcer('en')
+nouveauCatalogue({ a, b })
+dofile(PLUGIN .. '/RecreerAlbums.lua')
+local texteEn = dialogues[#dialogues] and dialogues[#dialogues].texte or ''
+verifier('anglais : message traduit', texteEn:find('collections created or completed in “Google Photos - albums”', 1, true) ~= nil, true)
+verifier('anglais : sessions traduites', texteEn:find('sessions (including', 1, true) ~= nil, true)
+local nomsEn = {}
+for _, c in ipairs(collections) do nomsEn[c.nom] = true end
+verifier('anglais : noms de collection inchangés', nomsEn['2025-01-01 – Vacances'], true)
+Langue.forcer(nil)
 
 print(string.format('%d vérifications, %d échecs', nb, echecs))
 os.exit(echecs == 0 and 0 or 1)

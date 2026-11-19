@@ -9,7 +9,8 @@
 //   --sous-dossiers  inclut aussi les sous-dossiers ;
 //   --bloc N         un cadre gardé pour N cadres (4 par défaut : on retire 3 cadres sur 4) ;
 //   --ignorer NOM    ne compte pas cette collection (ou cet ensemble de collections de premier niveau)
-//                    comme protection ; l'option peut être répétée. « Google Photos - époques » est
+//                    comme protection ; l'option peut être répétée. « Google Photos - sessions » (ou
+//                    « Google Photos - époques », son nom avant la version 1.1) est
 //                    toujours ignorée.
 // Fichiers écrits dans le dossier courant : rafales-<dossier>.html (miniatures) et .csv (détail).
 //
@@ -21,7 +22,7 @@
 // Dans chaque rafale, les cadres sont découpés en blocs de N cadres consécutifs (blocs de taille
 // égale) et on garde le plus net des cadres non protégés de chaque bloc. Sont protégés, donc toujours
 // gardés EN PLUS : les cadres
-//   - dans une collection autre que « Google Photos - époques » (les albums Google comptent) ;
+//   - dans une collection autre que « Google Photos - sessions » (les albums Google comptent) ;
 //   - notés, marqués d'un drapeau ou d'un libellé de couleur, retouchés dans Lightroom ou avec des
 //     copies virtuelles ;
 //   - qui ont une version retouchée dans un éditeur externe (-Modifier, DxO_…).
@@ -48,7 +49,8 @@ const MIN_CADRES = 3;
 const PARALLELE = 6;
 const LARGEUR_MESURE = 1200;
 const COTE_MINIATURE = 200;
-const COLLECTIONS_SANS_PROTECTION = new Set(['Google Photos - époques', 'Doublons à retirer', 'Rafales à retirer']);
+const COLLECTIONS_SANS_PROTECTION = new Set(['Google Photos - sessions', 'Google Photos - époques', 'Doublons à retirer',
+  'Rafales à retirer']);
 const RANG_FORMAT = { jpg: 0, jpeg: 0, tif: 1, tiff: 1, png: 2, heic: 3 };
 
 // --- Entrée ----------------------------------------------------------------------------------------

@@ -12,6 +12,8 @@ const mutants = [
     'if not dejaIgnoree and Historique.contient(historique, brut.path) then', 'if false then'],
   ['un historique absent (sans Deduplicate) est refusé',
     'if LrFileUtils.exists(HISTORIQUE) then', 'if true then'],
+  ['l’ancien ensemble « époques » n’est plus renommé',
+    'if ancien and not nouveau then', 'if false then'],
   ['un historique non migré est accepté',
     "contenu:find('# historique-commun-deduplicate-google-v1', 1, true)", 'true'],
   ['un fichier téléchargé déjà présent est réimporté',

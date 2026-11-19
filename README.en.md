@@ -8,18 +8,20 @@ without going through Takeout:
 - **Recreates your Google Photos albums as Lightroom collections**, grouped by year
   (`Google Photos - albums / 2025 / 2025-07-24 – Week-end à Lyon`), and finds in the catalog the originals of photos
   that Google only keeps as downsized copies.
-- **Groups photos by period**: for each album, every catalog photo taken during the same period, plus filler
-  collections for the gaps between two periods.
+- **Groups photos by session** (`Google Photos - sessions`): for each album, every catalog photo taken during the
+  same period, plus filler collections for the gaps between two periods.
 - **Retrieves missing photos**: photos from shared albums, or never synced with Lightroom, are downloaded in original
   quality, ready to import.
-- **Exports a collection to a Google Photos album** from Lightroom's export dialog, through the official API, with
+- **Exports a collection to a Google Photos album** from Lightroom's export dialog (the album name is prefilled
+  with the collection's), through the official API, with
   photo resizing and 1080p video conversion.
 
 Updates are incremental: only new or changed albums are read again, and existing collections are completed, never
 duplicated.
 
-> The plug-in interface and the full user guide ([LISEZ-MOI.md](LISEZ-MOI.md)) are in French; this page summarises
-> what it does and how to get started.
+> The plug-in interface is available in English (plug-in setting, see Installation). The full user guide
+> ([LISEZ-MOI.md](LISEZ-MOI.md)) and the Node scripts' messages are in French; this page summarises what the plug-in
+> does and how to get started.
 
 ## Requirements
 
@@ -34,6 +36,8 @@ duplicated.
 1. Download the latest version from [Releases](../../releases) and unzip it **in full** into a folder you can write
    to: the plug-in uses the scripts and files that sit next to its own folder.
 2. In Lightroom Classic: **File → Plug-in Manager → Add**, then choose the `albums-google-photos.lrplugin` folder.
+3. In the same Plug-in Manager, select the plug-in and choose **English** as the interface language. The menu title
+   follows Lightroom's own language.
 
 ## Getting started
 
@@ -45,7 +49,7 @@ duplicated.
 
    The first time, a Chrome window opens: sign in to your Google account. The session is kept in a dedicated Chrome
    profile.
-2. In Lightroom: **Library → Plug-in Extras → Recréer les albums Google Photos…** (recreate Google Photos albums),
+2. In Lightroom: **Library → Plug-in Extras → Recreate Google Photos albums…** (in French Lightroom: « Recréer les albums Google Photos… »),
    then choose `photos-albums-tous.csv`.
 3. If some photos are missing from the catalog, run `node telecharger-manquantes.mjs`, import the
    `photos-albums-tous-manquantes` folder, then run step 2 again.
@@ -53,7 +57,8 @@ duplicated.
 ## Limitations and precautions
 
 - **Windows only**: Chrome, Lightroom and the working folders are looked up in their Windows locations.
-- **French interface and documentation.**
+- **Interface in French or English** (plug-in setting); the detailed guide and the Node scripts are in French.
+  Collection names (`(hors album)`, `Sans date`, `Intercalaire jusqu'au…`) stay the same in both languages.
 - **Albums are read through an undocumented interface.** Since March 2025, the official Google Photos API no longer
   gives access to a user's albums, so `export-albums.mjs` and `telecharger-manquantes.mjs` read the Google Photos
   website through your Chrome session. They may stop working if Google changes its site, and this use is not
@@ -71,7 +76,7 @@ Your exports (CSV), downloaded photos and OAuth credentials stay on your machine
 
 [Deduplicate](https://github.com/mtthth/lightroom-deduplicate) merges duplicates and thins out bursts. Installed in
 two sibling folders, `lightroom-google-photos` (keep this name) and `lightroom-deduplicate`, the two plug-ins share
-the history of discarded photos: photos removed by Deduplicate do not come back in albums, periods or downloads.
+the history of discarded photos: photos removed by Deduplicate do not come back in albums, sessions or downloads.
 This plug-in also works on its own; if you add Deduplicate later, run it once before recreating the albums.
 
 ## Tests
@@ -79,7 +84,7 @@ This plug-in also works on its own; if you add Deduplicate later, run it once be
 ```powershell
 node tests/lancer.mjs             # Lua and JavaScript suites (Node 22+, MiKTeX texlua)
 node tests/lancer.mjs --js        # JavaScript only, without MiKTeX
-node tests/lancer.mjs --mutants   # tests, then five controlled regressions
+node tests/lancer.mjs --mutants   # tests, then six controlled regressions
 ```
 
 The tests run outside Lightroom against a fake Lightroom and synthetic data: they do not open Chrome, call Google,

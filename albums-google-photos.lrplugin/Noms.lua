@@ -13,9 +13,11 @@
 local M = {}
 
 -- Ensembles de collections créés par « Recréer les albums Google Photos ». Les autres commandes du
--- module s'en servent : les albums protègent une photo (rafales), les époques non.
+-- module s'en servent : les albums protègent une photo (rafales), les sessions non.
 M.ENSEMBLE_ALBUMS = 'Google Photos - albums'
-M.ENSEMBLE_EPOQUES = 'Google Photos - époques'
+M.ENSEMBLE_SESSIONS = 'Google Photos - sessions'
+-- Nom de l'ensemble des sessions jusqu'à la version 1.0.1 : renommé au premier passage.
+M.ANCIEN_ENSEMBLE_SESSIONS = 'Google Photos - époques'
 
 local SEPARATEUR = ' – '
 
