@@ -72,8 +72,9 @@ projet et dans `%LOCALAPPDATA%\lightroom-google-photos` ; ils sont exclus du sui
 ## Module voisin facultatif
 
 [Deduplicate](https://github.com/mtthth/lightroom-deduplicate) fusionne les doublons et réduit les rafales. Installés
-côte à côte, les deux modules partagent l'historique des photos écartées : celles que Deduplicate a retirées ne
-réapparaissent ni dans les albums, ni dans les époques, ni dans les téléchargements.
+dans deux dossiers voisins, `lightroom-google-photos` (nom à conserver) et `lightroom-deduplicate`, les deux modules
+partagent l'historique des photos écartées : celles que Deduplicate a retirées ne réapparaissent ni dans les albums,
+ni dans les époques, ni dans les téléchargements.
 
 ## Tests
 
@@ -88,4 +89,4 @@ n'appellent pas Google et ne touchent ni à votre catalogue ni à vos exports.
 
 ## Licence
 
-[MIT](LICENSE).
+[MIT](LICENSE). Les évolutions sont décrites dans le [journal des versions](CHANGELOG.md).

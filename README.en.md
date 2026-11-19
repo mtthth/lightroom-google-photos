@@ -69,9 +69,9 @@ Your exports (CSV), downloaded photos and OAuth credentials stay on your machine
 
 ## Optional companion plug-in
 
-[Deduplicate](https://github.com/mtthth/lightroom-deduplicate) merges duplicates and thins out bursts. Installed side
-by side, the two plug-ins share the history of discarded photos: photos removed by Deduplicate do not come back in
-albums, periods or downloads.
+[Deduplicate](https://github.com/mtthth/lightroom-deduplicate) merges duplicates and thins out bursts. Installed in
+two sibling folders, `lightroom-google-photos` (keep this name) and `lightroom-deduplicate`, the two plug-ins share
+the history of discarded photos: photos removed by Deduplicate do not come back in albums, periods or downloads.
 
 ## Tests
 
@@ -86,4 +86,4 @@ or touch your catalog or exports.
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE). Changes are listed in the [changelog](CHANGELOG.md) (in French).
