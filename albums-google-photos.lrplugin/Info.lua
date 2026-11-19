@@ -3,7 +3,7 @@
 return {
   LrSdkVersion = 10.0,
   LrSdkMinimumVersion = 6.0,
-  LrToolkitIdentifier = 'fr.matthieu.albumsgooglephotos',
+  LrToolkitIdentifier = 'io.github.mtthth.albumsgooglephotos',
   LrPluginName = 'Albums Google Photos',
   LrLibraryMenuItems = {
     { title = 'Recréer les albums Google Photos…', file = 'RecreerAlbums.lua' },
@@ -13,5 +13,5 @@ return {
     file = 'ServiceGooglePhotos.lua',
     builtInPresetsDir = 'presets',
   },
-  VERSION = { major = 26, minor = 10, revision = 0 },
+  VERSION = { major = 1, minor = 0, revision = 0 },
 }

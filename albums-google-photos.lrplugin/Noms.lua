@@ -4,11 +4,11 @@
 -- La date est celle que le titre de l'album porte en préfixe, sinon celle de la première photo.
 -- Le préfixe de date du titre est retiré, car son format est différent de celui des collections.
 -- Formats de préfixe reconnus :
---   2025.07.24 Gien…    2025-07-24 Gien…    (AAAA.MM.JJ, avec ou sans point final)
---   20260423. Saint…    20250804 France…    (AAAAMMJJ)
---   110909. Méchoui     131102.Vaux…        (AAMMJJ, point obligatoire ; AA < 31 : 20AA, sinon 19AA)
+--   2025.07.24 Lyon…    2025-07-24 Lyon…    (AAAA.MM.JJ, avec ou sans point final)
+--   20260423. Plage…    20250804 Plage…     (AAAAMMJJ)
+--   110909. Mariage     131102.Rando…       (AAMMJJ, point obligatoire ; AA < 31 : 20AA, sinon 19AA)
 --   2112. Noël          (AAMM, point obligatoire : mois seul, jour = première photo ou 01)
---   000000. Meulan      (date inconnue : le préfixe est retiré, on prend la première photo)
+--   000000. Divers      (date inconnue : le préfixe est retiré, on prend la première photo)
 
 local M = {}
 

@@ -3,7 +3,7 @@
 Recrée dans Lightroom Classic les albums de Google Photos (sans passer par Takeout) :
 
 - **Google Photos - albums** : une collection par album, rangée par année
-  (`2025 / 2025-07-24 – Gien dans le Loiret`).
+  (`2025 / 2025-07-24 – Week-end à Lyon`).
 - **Google Photos - époques** : pour chaque album, toutes les photos du catalogue prises entre sa première et sa
   dernière photo, plus des collections « Intercalaire jusqu'au… » dans les trous entre deux périodes.
 
@@ -11,8 +11,8 @@ Les photos de Google Photos qui ne sont dans **aucun album** sont rangées dans 
 de chaque année (`Google Photos - albums / 2019 / (hors album)`, année de la photo, ou `Sans date`). Comme toutes les
 photos du catalogue prises pendant une époque en font partie, elles se retrouvent aussi dans la bonne époque.
 
-La date du nom est celle du titre de l'album s'il en porte une (`110909. Méchoui`, `2025.07.24 Gien…`,
-`20260423. Saint-Tropez`…), sinon celle de sa première photo. L'ancien préfixe de date est retiré du titre.
+La date du nom est celle du titre de l'album s'il en porte une (`110909. Mariage`, `2025.07.24 Lyon…`,
+`20260423. Plage`…), sinon celle de sa première photo. L'ancien préfixe de date est retiré du titre.
 
 ## Ce qu'il faut
 
@@ -20,6 +20,12 @@ La date du nom est celle du titre de l'album s'il en porte une (`110909. Méchou
 - Le module Lightroom : Fichier → Gestionnaire de modules externes → Ajouter → dossier `albums-google-photos.lrplugin`.
 - La première fois, `export-albums.mjs` ouvre une fenêtre Chrome : connecte-toi à ton compte Google
   (la session est conservée dans un profil dédié, `%LOCALAPPDATA%\lightroom-google-photos\chrome-profile`).
+
+**Mise à jour depuis une version antérieure à 1.0 (26.10.0 ou avant).** L'identifiant du module est devenu
+`io.github.mtthth.albumsgooglephotos` (il était `fr.matthieu.albumsgooglephotos`). Lightroom le voit comme un
+nouveau module : retire l'ancien du Gestionnaire de modules externes avant d'ajouter celui-ci. Les collections
+déjà créées et la connexion à Google Photos sont conservées ; les préréglages d'export « Google Photos » que tu
+as enregistrés toi-même sont à recréer à partir du préréglage fourni « Google Photos 4K ».
 
 ## Mise à jour (tous les quelques mois)
 

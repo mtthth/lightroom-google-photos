@@ -16,3 +16,5 @@ node tests/lancer.mjs --mutants   # tests et quatre régressions contrôlées
 ```
 
 Les exports personnels, les photos, l’historique et les secrets OAuth sont exclus du suivi Git.
+
+Distribué sous licence [MIT](LICENSE).
