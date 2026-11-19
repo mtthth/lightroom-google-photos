@@ -12,14 +12,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Compilateur MSVC pour construire Lua sous Windows.
-      - uses: ilammy/msvc-dev-cmd@v1
-      - uses: leafo/gh-actions-lua@v10
-        with:
-          luaVersion: '5.3'
-      # Lua 5.3 remplace texlua (MiKTeX), qui est un Lua 5.3.
+      # Les tests Lua utilisent texlua (MiKTeX) : Lua 5.3 avec les bibliothèques md5 et sha2 intégrées.
+      - name: Installer MiKTeX
+        shell: pwsh
+        run: choco install miktex --no-progress -y
       - name: Suites Lua et JavaScript
         shell: pwsh
         run: |
-          $env:TEXLUA = (Get-Command lua).Source
+          $env:TEXLUA = (Get-ChildItem -Path "$env:ProgramFiles\MiKTeX", "$env:LOCALAPPDATA\Programs\MiKTeX" `
+            -Filter texlua.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $env:TEXLUA) { throw 'texlua.exe introuvable après l’installation de MiKTeX' }
           node tests/lancer.mjs --mutants
