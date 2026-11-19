@@ -21,5 +21,7 @@ jobs:
         run: |
           $env:TEXLUA = (Get-ChildItem -Path "$env:ProgramFiles\MiKTeX", "$env:LOCALAPPDATA\Programs\MiKTeX" `
             -Filter texlua.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
-          if (-not $env:TEXLUA) { throw 'texlua.exe introuvable après l’installation de MiKTeX' }
+          # Pas d'apostrophe typographique ici : PowerShell la prend pour une fin de chaîne.
+          if (-not $env:TEXLUA) { throw "texlua.exe introuvable dans l'installation de MiKTeX" }
+          Write-Host "texlua : $env:TEXLUA"
           node tests/lancer.mjs --mutants

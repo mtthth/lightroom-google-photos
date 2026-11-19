@@ -74,14 +74,15 @@ projet et dans `%LOCALAPPDATA%\lightroom-google-photos` ; ils sont exclus du sui
 [Deduplicate](https://github.com/mtthth/lightroom-deduplicate) fusionne les doublons et réduit les rafales. Installés
 dans deux dossiers voisins, `lightroom-google-photos` (nom à conserver) et `lightroom-deduplicate`, les deux modules
 partagent l'historique des photos écartées : celles que Deduplicate a retirées ne réapparaissent ni dans les albums,
-ni dans les époques, ni dans les téléchargements.
+ni dans les époques, ni dans les téléchargements. Ce module fonctionne aussi seul ; si vous ajoutez Deduplicate
+après coup, lancez-le une fois avant de recréer les albums.
 
 ## Tests
 
 ```powershell
 node tests/lancer.mjs             # suites Lua et JavaScript (Node 22+, texlua de MiKTeX)
 node tests/lancer.mjs --js        # JavaScript seul, sans MiKTeX
-node tests/lancer.mjs --mutants   # tests, puis quatre régressions contrôlées
+node tests/lancer.mjs --mutants   # tests, puis cinq régressions contrôlées
 ```
 
 Les tests tournent hors de Lightroom avec un faux Lightroom et des données synthétiques : ils n'ouvrent pas Chrome,

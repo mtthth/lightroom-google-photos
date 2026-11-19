@@ -249,10 +249,14 @@ local function indexerCatalogue(catalogue, progression, problemes)
   progression:setCaption('Lecture du catalogue : liste des photos…')
   local photos = catalogue:getAllPhotos()
   local ignorees, nbIgnorees = copiesEnTrop(catalogue)
-  -- Deduplicate est le seul à synchroniser ce fichier avec l'annulation Lightroom.
-  local contenu = LrFileUtils.exists(HISTORIQUE) and LrFileUtils.readFile(HISTORIQUE)
-  assert(contenu and contenu:find('# historique-commun-deduplicate-google-v1', 1, true),
-    'Historique partagé non initialisé : recharge le module Deduplicate avant de recréer les albums.')
+  -- Deduplicate est le seul à créer ce fichier et à le synchroniser avec l'annulation Lightroom.
+  -- Absent : Deduplicate n'a jamais tourné à côté, l'historique est vide. Présent sans marqueur :
+  -- ancien historique que Deduplicate n'a pas encore repris ; s'en servir tel quel serait faux.
+  if LrFileUtils.exists(HISTORIQUE) then
+    local contenu = LrFileUtils.readFile(HISTORIQUE)
+    assert(contenu and contenu:find('# historique-commun-deduplicate-google-v1', 1, true),
+      'Historique partagé non initialisé : recharge le module Deduplicate avant de recréer les albums.')
+  end
   local historique = Historique.lire(HISTORIQUE)
   local index = Correspondance.nouvelIndex()
   index.traitees = Correspondance.nouvelIndex()

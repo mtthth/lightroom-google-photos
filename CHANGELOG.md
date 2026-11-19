@@ -1,5 +1,11 @@
 # Journal des versions
 
+## 1.0.1
+
+- « Recréer les albums Google Photos » fonctionne sans Deduplicate : quand l'historique commun
+  `photos-traitees.txt` n'existe pas, les albums sont recréés avec un historique vide au lieu d'être refusés.
+  Un historique présent mais pas encore repris par Deduplicate reste refusé.
+
 ## 1.0.0
 
 Première version publique.

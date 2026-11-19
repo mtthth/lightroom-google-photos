@@ -85,7 +85,8 @@ extension que le fichier Google qui est mis dans la collection d'album (les deux
 ## Déduplication
 
 Les commandes de fusion des doublons et de réduction des rafales sont dans le dépôt séparé
-[`lightroom-deduplicate`](https://github.com/mtthth/lightroom-deduplicate). Les deux projets doivent être voisins :
+[`lightroom-deduplicate`](https://github.com/mtthth/lightroom-deduplicate). Il est facultatif : sans lui, les albums
+sont recréés sans tenir compte de photos écartées. Pour utiliser les deux, les projets doivent être voisins :
 
 ```text
 projets/
@@ -100,7 +101,9 @@ Ajoute les deux dossiers `.lrplugin` au gestionnaire de modules externes de Ligh
 Après leur mise à jour, redémarre Lightroom. Deduplicate initialise et synchronise seul l’historique commun
 `lightroom-google-photos/photos-traitees.txt`, y compris après Annuler / Rétablir. Google Photos le lit pour
 que les photos écartées ne réapparaissent pas dans les albums, les époques ou les téléchargements.
-Si le module signale un historique non initialisé, recharge Deduplicate avant de recréer les albums.
+Si tu ajoutes Deduplicate après coup, lance-le une fois avant de recréer les albums, pour qu'il crée ce fichier.
+Si le module signale un historique non initialisé (fichier présent mais pas encore repris par Deduplicate),
+recharge Deduplicate avant de recréer les albums.
 
 ### Export « Google Photos » (envoyer une collection)
 
@@ -135,7 +138,7 @@ Depuis mars 2025, l'API ne permet de compléter que les albums créés par l'app
 ```
 node tests/lancer.mjs             # quatre suites Lua et quatre suites JavaScript
 node tests/lancer.mjs --js        # JavaScript seul, sans MiKTeX
-node tests/lancer.mjs --mutants   # puis vérifie quatre régressions de recréation des albums
+node tests/lancer.mjs --mutants   # puis vérifie cinq régressions de recréation des albums
 ```
 
 Ils tournent sous Windows, hors de Lightroom, avec `texlua` (le Lua de MiKTeX ; variable `TEXLUA` pour un autre

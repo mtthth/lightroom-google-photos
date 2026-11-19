@@ -72,13 +72,14 @@ Your exports (CSV), downloaded photos and OAuth credentials stay on your machine
 [Deduplicate](https://github.com/mtthth/lightroom-deduplicate) merges duplicates and thins out bursts. Installed in
 two sibling folders, `lightroom-google-photos` (keep this name) and `lightroom-deduplicate`, the two plug-ins share
 the history of discarded photos: photos removed by Deduplicate do not come back in albums, periods or downloads.
+This plug-in also works on its own; if you add Deduplicate later, run it once before recreating the albums.
 
 ## Tests
 
 ```powershell
 node tests/lancer.mjs             # Lua and JavaScript suites (Node 22+, MiKTeX texlua)
 node tests/lancer.mjs --js        # JavaScript only, without MiKTeX
-node tests/lancer.mjs --mutants   # tests, then four controlled regressions
+node tests/lancer.mjs --mutants   # tests, then five controlled regressions
 ```
 
 The tests run outside Lightroom against a fake Lightroom and synthetic data: they do not open Chrome, call Google,

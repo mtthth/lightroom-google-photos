@@ -10,6 +10,8 @@ const mutants = [
     'if not brut.isVirtualCopy and not dejaIgnoree then', 'if not brut.isVirtualCopy then'],
   ['les exclusions du fichier historique sont ignorées',
     'if not dejaIgnoree and Historique.contient(historique, brut.path) then', 'if false then'],
+  ['un historique absent (sans Deduplicate) est refusé',
+    'if LrFileUtils.exists(HISTORIQUE) then', 'if true then'],
   ['un historique non migré est accepté',
     "contenu:find('# historique-commun-deduplicate-google-v1', 1, true)", 'true'],
   ['un fichier téléchargé déjà présent est réimporté',

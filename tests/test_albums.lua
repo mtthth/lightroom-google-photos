@@ -430,12 +430,17 @@ for _, texte in ipairs({ '', '# ancien historique\r\n' }) do
     dialogues[#dialogues].texte:find('Historique partagé non initialisé', 1, true) ~= nil, true)
   verifier('historique non initialisé : fichier conservé', contenuHistorique(), texte)
 end
+-- Sans Deduplicate, le fichier n'existe pas : l'historique est vide et les albums sont recréés.
 assert(os.remove(HISTORIQUE))
 nouveauCatalogue({ photoB })
+local nbDialogues = #dialogues
 dofile(PLUGIN .. '/RecreerAlbums.lua')
-verifier('historique absent : pas de collections créées', #collections, 0)
-verifier('historique absent : message explicite',
-  dialogues[#dialogues].texte:find('Historique partagé non initialisé', 1, true) ~= nil, true)
+verifier('historique absent : collections créées', #collections > 0, true)
+local refus = false
+for i = nbDialogues + 1, #dialogues do
+  if dialogues[i].texte:find('Historique partagé non initialisé', 1, true) then refus = true end
+end
+verifier('historique absent : pas de refus', refus, false)
 verifier('historique absent : fichier non créé par Google Photos', mocks.LrFileUtils.exists(HISTORIQUE), false)
 
 print(string.format('%d vérifications, %d échecs', nb, echecs))
